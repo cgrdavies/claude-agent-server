@@ -28,39 +28,30 @@ async function main() {
     const commands = [
       {
         type: 'create_file',
-        path: 'test_binary.bin',
-        content: Buffer.from('Binary Content').toString('base64'),
-        encoding: 'base64',
+        path: 'input.txt',
+        content: 'Hello! This is a test file created by the user.',
+        encoding: 'utf-8',
       },
       {
-        type: 'create_file',
-        path: 'test_text.txt',
-        content: 'Plain Text Content',
-        encoding: 'utf-8',
+        type: 'user_message',
+        data: {
+          type: 'user',
+          session_id: 'example-session',
+          parent_tool_use_id: null,
+          message: {
+            role: 'user',
+            content:
+              'Please read "input.txt", reverse its content, and save it to a new file named "output.txt".',
+          },
+        },
       },
       {
         type: 'list_files',
       },
       {
         type: 'read_file',
-        path: 'test_binary.bin',
-        encoding: 'base64',
-      },
-      {
-        type: 'read_file',
-        path: 'test_text.txt',
+        path: 'output.txt',
         encoding: 'utf-8',
-      },
-      {
-        type: 'delete_file',
-        path: 'test_binary.bin',
-      },
-      {
-        type: 'delete_file',
-        path: 'test_text.txt',
-      },
-      {
-        type: 'list_files',
       },
     ] as const
 
@@ -97,7 +88,8 @@ async function main() {
       client.send(command)
 
       // Wait for response
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      const waitTime = command.type === 'user_message' ? 10000 : 1000
+      await new Promise(resolve => setTimeout(resolve, waitTime))
     }
 
     // Disconnect

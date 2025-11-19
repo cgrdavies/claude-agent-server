@@ -1,15 +1,14 @@
 import { Sandbox } from 'e2b'
 
-import type { WSInputMessage, WSOutputMessage } from './types'
+import type { QueryConfig, WSInputMessage, WSOutputMessage } from './types'
 
 export * from './types'
 
 export const DEFAULT_TEMPLATE = 'claude-agent-server'
 export const SERVER_PORT = 3000
 
-export interface ClientOptions {
+export interface ClientOptions extends Partial<QueryConfig> {
   e2bApiKey?: string
-  anthropicApiKey?: string
   template?: string
   timeoutMs?: number
   debug?: boolean
@@ -67,6 +66,7 @@ export class ClaudeAgentClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         anthropicApiKey,
+        ...this.options,
       }),
     })
 
