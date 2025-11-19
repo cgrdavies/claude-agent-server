@@ -6,8 +6,12 @@
 
 import { ClaudeAgentClient } from './src/index'
 
+const args = process.argv.slice(2)
+const isLocal = args.includes('--local')
+const connectionUrl = isLocal ? 'http://localhost:3000' : undefined
+
 // Check for required environment variables
-if (!process.env.E2B_API_KEY) {
+if (!isLocal && !process.env.E2B_API_KEY) {
   console.error('❌ E2B_API_KEY environment variable is required')
   process.exit(1)
 }
@@ -20,6 +24,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
 async function main() {
   const client = new ClaudeAgentClient({
     debug: true,
+    connectionUrl,
   })
 
   try {

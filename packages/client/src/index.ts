@@ -12,6 +12,7 @@ export interface ClientOptions extends Partial<QueryConfig> {
   template?: string
   timeoutMs?: number
   debug?: boolean
+  connectionUrl?: string
 }
 
 export class ClaudeAgentClient {
@@ -30,32 +31,50 @@ export class ClaudeAgentClient {
 
   async start() {
     const apiKey = this.options.e2bApiKey || process.env.E2B_API_KEY
-    if (!apiKey) {
-      throw new Error('E2B_API_KEY is required')
-    }
-
     const anthropicApiKey =
       this.options.anthropicApiKey || process.env.ANTHROPIC_API_KEY
+
     if (!anthropicApiKey) {
       throw new Error('ANTHROPIC_API_KEY is required')
     }
 
-    if (this.options.debug) {
-      console.log(`🚀 Creating E2B sandbox from ${this.options.template}...`)
+    let configUrl: string
+    let wsUrl: string
+
+    if (this.options.connectionUrl) {
+      // Local/Custom connection mode
+      if (this.options.debug) {
+        console.log(
+          `🔌 Connecting to custom URL: ${this.options.connectionUrl}`,
+        )
+      }
+
+      const baseUrl = this.options.connectionUrl.replace(/\/$/, '')
+      configUrl = `${baseUrl.replace('ws://', 'http://').replace('wss://', 'https://')}/config`
+      wsUrl = `${baseUrl.replace('http://', 'ws://').replace('https://', 'wss://')}/ws`
+    } else {
+      // E2B Sandbox mode
+      if (!apiKey) {
+        throw new Error('E2B_API_KEY is required')
+      }
+
+      if (this.options.debug) {
+        console.log(`🚀 Creating E2B sandbox from ${this.options.template}...`)
+      }
+
+      this.sandbox = await Sandbox.create(this.options.template!, {
+        apiKey,
+        timeoutMs: this.options.timeoutMs,
+      })
+
+      if (this.options.debug) {
+        console.log(`✅ Sandbox created: ${this.sandbox.sandboxId}`)
+      }
+
+      const sandboxHost = this.sandbox.getHost(SERVER_PORT)
+      configUrl = `https://${sandboxHost}/config`
+      wsUrl = `wss://${sandboxHost}/ws`
     }
-
-    this.sandbox = await Sandbox.create(this.options.template!, {
-      apiKey,
-      timeoutMs: this.options.timeoutMs,
-    })
-
-    if (this.options.debug) {
-      console.log(`✅ Sandbox created: ${this.sandbox.sandboxId}`)
-    }
-
-    const sandboxHost = this.sandbox.getHost(SERVER_PORT)
-    const configUrl = `https://${sandboxHost}/config`
-    const wsUrl = `wss://${sandboxHost}/ws`
 
     if (this.options.debug) {
       console.log(`📡 Configuring server at ${configUrl}...`)
@@ -72,7 +91,9 @@ export class ClaudeAgentClient {
 
     if (!configResponse.ok) {
       const error = await configResponse.text()
-      await this.sandbox.kill()
+      if (this.sandbox) {
+        await this.sandbox.kill()
+      }
       throw new Error(`Failed to configure server: ${error}`)
     }
 
