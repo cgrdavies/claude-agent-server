@@ -15,6 +15,23 @@ A WebSocket server that wraps the Claude Agent SDK, allowing real-time bidirecti
 bun install
 ```
 
+### Environment Setup
+
+Create a `.env` file from the example template:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and add your API keys:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-your-api-key-here
+E2B_API_KEY=e2b_your-api-key-here  # Optional, only for E2B deployment
+```
+
+**Note:** Bun automatically loads `.env` files - no additional packages required!
+
 ## Usage
 
 ### Start the Server
@@ -377,9 +394,23 @@ const server = Bun.serve<SessionData>({
 
 ## Environment Variables
 
-The server supports setting the Anthropic API key in two ways:
+The server supports setting the Anthropic API key in three ways:
 
-1. **Via Configuration API** (recommended): Set `anthropicApiKey` in the `/config` endpoint:
+1. **Via `.env` file** (recommended for local development): Create a `.env` file in the project root:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Then edit `.env` and set your API key:
+
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+
+   Bun automatically loads `.env` files when running the server.
+
+2. **Via Configuration API** (recommended for runtime configuration): Set `anthropicApiKey` in the `/config` endpoint:
 
    ```bash
    curl -X POST http://localhost:3000/config \
@@ -387,7 +418,7 @@ The server supports setting the Anthropic API key in two ways:
      -d '{"anthropicApiKey": "sk-ant-..."}'
    ```
 
-2. **Via Environment Variable**: Set `ANTHROPIC_API_KEY` in your environment before starting the server:
+3. **Via Environment Variable**: Set `ANTHROPIC_API_KEY` in your shell before starting the server:
    ```bash
    export ANTHROPIC_API_KEY=sk-ant-...
    bun index.ts

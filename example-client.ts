@@ -4,6 +4,23 @@
  * Usage: bun example-client.ts
  */
 
+// Configure the server before connecting
+const configResponse = await fetch('http://localhost:3000/config', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  }),
+})
+
+if (!configResponse.ok) {
+  console.error('❌ Failed to configure server:', await configResponse.text())
+  process.exit(1)
+}
+
+const configResult = await configResponse.json()
+console.log('⚙️  Server configured:', configResult)
+
 const ws = new WebSocket('ws://localhost:3000/ws')
 
 ws.onopen = async () => {

@@ -1,7 +1,5 @@
 // E2B build script
 
-import 'dotenv/config'
-
 import { defaultBuildLogger, Template, waitForPort } from 'e2b'
 
 const template = Template()
