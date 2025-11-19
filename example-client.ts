@@ -5,52 +5,62 @@
  */
 
 const ws = new WebSocket('ws://localhost:3000/ws')
-const sessionId = crypto.randomUUID()
 
-ws.onopen = () => {
+ws.onopen = async () => {
   console.log('✅ Connected to Claude Agent SDK')
-  console.log(`📝 Session ID: ${sessionId}\n`)
 
-  // Send an initial message (WSInputMessage format)
-  const message = {
-    type: 'user_message' as const,
-    data: {
-      type: 'user' as const,
-      session_id: sessionId,
-      parent_tool_use_id: null,
-      message: {
-        role: 'user' as const,
-        content: 'Hello! Can you tell me a short joke about programming?',
-      },
+  const commands = [
+    {
+      type: 'create_file',
+      path: 'test_binary.bin',
+      content: Buffer.from('Binary Content').toString('base64'),
+      encoding: 'base64',
     },
+    {
+      type: 'create_file',
+      path: 'test_text.txt',
+      content: 'Plain Text Content',
+      encoding: 'utf-8',
+    },
+    {
+      type: 'list_files',
+    },
+    {
+      type: 'read_file',
+      path: 'test_binary.bin',
+      encoding: 'base64',
+    },
+    {
+      type: 'read_file',
+      path: 'test_text.txt',
+      encoding: 'utf-8',
+    },
+    {
+      type: 'delete_file',
+      path: 'test_binary.bin',
+    },
+    {
+      type: 'delete_file',
+      path: 'test_text.txt',
+    },
+    {
+      type: 'list_files',
+    },
+  ]
+
+  for (const command of commands) {
+    console.log(`\n📤 Sending command: ${command.type}`)
+    ws.send(JSON.stringify(command))
+
+    // Wait for response
+    await new Promise(resolve => setTimeout(resolve, 1000))
   }
 
-  console.log('📤 Sending:', message.data.message.content)
-  ws.send(JSON.stringify(message))
-
-  // Send another message after a delay
-  setTimeout(() => {
-    const followUp = {
-      type: 'user_message' as const,
-      data: {
-        type: 'user' as const,
-        session_id: sessionId,
-        parent_tool_use_id: null,
-        message: {
-          role: 'user' as const,
-          content: 'Now tell me one about TypeScript.',
-        },
-      },
-    }
-    console.log('\n📤 Sending:', followUp.data.message.content)
-    ws.send(JSON.stringify(followUp))
-  }, 5000)
-
-  // Disconnect after 15 seconds
+  // Disconnect
   setTimeout(() => {
     console.log('\n👋 Closing connection...')
     ws.close()
-  }, 15000)
+  }, 1000)
 }
 
 ws.onmessage = event => {
@@ -62,8 +72,11 @@ ws.onmessage = event => {
         console.log('🔗 Connection confirmed')
         break
 
-      case 'sdk_message':
-        console.log('📥 SDK Response:', JSON.stringify(message.data, null, 2))
+      case 'file_result':
+        console.log(
+          '📄 File Operation Result:',
+          JSON.stringify(message, null, 2),
+        )
         break
 
       case 'error':
@@ -86,9 +99,3 @@ ws.onclose = () => {
   console.log('\n👋 Disconnected from server')
   process.exit(0)
 }
-
-// Handle Ctrl+C gracefully
-process.on('SIGINT', () => {
-  console.log('\n\n🛑 Interrupted, closing connection...')
-  ws.close()
-})
