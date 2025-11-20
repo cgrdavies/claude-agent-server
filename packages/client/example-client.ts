@@ -1,17 +1,12 @@
 /**
- * Example WebSocket client for the Claude Agent SDK server running in E2B
+ * Example WebSocket client for the Claude Agent SDK server
  *
  * Usage: bun example-client.ts
  */
 
 import { ClaudeAgentClient } from './src/index'
 
-const args = process.argv.slice(2)
-const isLocal = args.includes('--local')
-const connectionUrl = isLocal ? 'http://localhost:3000' : undefined
-
-// Check for required environment variables
-if (!isLocal && !process.env.E2B_API_KEY) {
+if (!process.env.E2B_API_KEY) {
   console.error('❌ E2B_API_KEY environment variable is required')
   process.exit(1)
 }
@@ -24,19 +19,19 @@ if (!process.env.ANTHROPIC_API_KEY) {
 async function main() {
   const client = new ClaudeAgentClient({
     debug: true,
-    connectionUrl,
   })
 
   try {
     await client.start()
 
+    console.log('🗂️  Writing input.txt...')
+    await client.writeFile(
+      'input.txt',
+      'Hello! This is a test file created by the user.',
+    )
+    console.log('✅ File written')
+
     const commands = [
-      {
-        type: 'create_file',
-        path: 'input.txt',
-        content: 'Hello! This is a test file created by the user.',
-        encoding: 'utf-8',
-      },
       {
         type: 'user_message',
         data: {
@@ -57,13 +52,6 @@ async function main() {
       switch (message.type) {
         case 'connected':
           console.log('🔗 Connection confirmed')
-          break
-
-        case 'file_result':
-          console.log(
-            '📄 File Operation Result:',
-            JSON.stringify(message, null, 2),
-          )
           break
 
         case 'error':

@@ -11,16 +11,14 @@ export const SERVER_PORT = 3000
  * Configuration options for the Claude Agent Client
  */
 export interface ClientOptions extends Partial<QueryConfig> {
-  /** E2B API key (required for E2B mode, not needed if using connectionUrl) */
+  /** E2B API key */
   e2bApiKey?: string
-  /** E2B template name to use for creating sandboxes. Defaults to 'claude-agent-server' */
+  /** E2B template name. Defaults to 'claude-agent-server' */
   template?: string
-  /** Timeout in milliseconds for sandbox operations. Defaults to 5 minutes */
+  /** Timeout in milliseconds. Defaults to 5 minutes */
   timeoutMs?: number
   /** Enable debug logging */
   debug?: boolean
-  /** Custom connection URL (e.g., 'http://localhost:3000'). If set, E2B mode is disabled */
-  connectionUrl?: string
 }
 
 export class ClaudeAgentClient {
@@ -42,47 +40,30 @@ export class ClaudeAgentClient {
     const anthropicApiKey =
       this.options.anthropicApiKey || process.env.ANTHROPIC_API_KEY
 
+    if (!apiKey) {
+      throw new Error('E2B_API_KEY is required')
+    }
+
     if (!anthropicApiKey) {
       throw new Error('ANTHROPIC_API_KEY is required')
     }
 
-    let configUrl: string
-    let wsUrl: string
-
-    if (this.options.connectionUrl) {
-      // Local/Custom connection mode
-      if (this.options.debug) {
-        console.log(
-          `🔌 Connecting to custom URL: ${this.options.connectionUrl}`,
-        )
-      }
-
-      const baseUrl = this.options.connectionUrl.replace(/\/$/, '')
-      configUrl = `${baseUrl.replace('ws://', 'http://').replace('wss://', 'https://')}/config`
-      wsUrl = `${baseUrl.replace('http://', 'ws://').replace('https://', 'wss://')}/ws`
-    } else {
-      // E2B Sandbox mode
-      if (!apiKey) {
-        throw new Error('E2B_API_KEY is required')
-      }
-
-      if (this.options.debug) {
-        console.log(`🚀 Creating E2B sandbox from ${this.options.template}...`)
-      }
-
-      this.sandbox = await Sandbox.create(this.options.template!, {
-        apiKey,
-        timeoutMs: this.options.timeoutMs,
-      })
-
-      if (this.options.debug) {
-        console.log(`✅ Sandbox created: ${this.sandbox.sandboxId}`)
-      }
-
-      const sandboxHost = this.sandbox.getHost(SERVER_PORT)
-      configUrl = `https://${sandboxHost}/config`
-      wsUrl = `wss://${sandboxHost}/ws`
+    if (this.options.debug) {
+      console.log(`🚀 Creating sandbox from ${this.options.template}...`)
     }
+
+    this.sandbox = await Sandbox.create(this.options.template!, {
+      apiKey,
+      timeoutMs: this.options.timeoutMs,
+    })
+
+    if (this.options.debug) {
+      console.log(`✅ Sandbox created: ${this.sandbox.sandboxId}`)
+    }
+
+    const sandboxHost = this.sandbox.getHost(SERVER_PORT)
+    const configUrl = `https://${sandboxHost}/config`
+    const wsUrl = `wss://${sandboxHost}/ws`
 
     if (this.options.debug) {
       console.log(`📡 Configuring server at ${configUrl}...`)
@@ -156,6 +137,40 @@ export class ClaudeAgentClient {
       throw new Error('WebSocket is not connected')
     }
     this.ws.send(JSON.stringify(message))
+  }
+
+  async writeFile(path: string, content: string | Blob) {
+    if (!this.sandbox) {
+      throw new Error('Sandbox not initialized')
+    }
+    return this.sandbox.files.write(path, content)
+  }
+
+  async readFile(
+    path: string,
+    format: 'text' | 'blob',
+  ): Promise<string | Blob> {
+    if (!this.sandbox) {
+      throw new Error('Sandbox not initialized')
+    }
+    if (format === 'blob') {
+      return this.sandbox.files.read(path, { format })
+    }
+    return this.sandbox.files.read(path)
+  }
+
+  async removeFile(path: string) {
+    if (!this.sandbox) {
+      throw new Error('Sandbox not initialized')
+    }
+    return this.sandbox.files.remove(path)
+  }
+
+  async listFiles(path = '.') {
+    if (!this.sandbox) {
+      throw new Error('Sandbox not initialized')
+    }
+    return this.sandbox.files.list(path)
   }
 
   async stop() {

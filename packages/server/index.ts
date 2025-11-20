@@ -152,7 +152,6 @@ const server = Bun.serve({
       await handleMessage(ws, message, {
         messageQueue,
         getActiveStream: () => activeStream,
-        workspaceDirectory,
       })
     },
 
