@@ -1,6 +1,6 @@
 {
   "name": "@dzhng/claude-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Client library for Claude Agent Server with E2B sandbox support",
   "keywords": [
     "claude",
@@ -26,6 +26,14 @@
     ".": {
       "import": "./src/index.ts",
       "types": "./src/index.ts"
+    },
+    "./types": {
+      "import": "./src/types.ts",
+      "types": "./src/types.ts"
+    },
+    "./const": {
+      "import": "./src/const.ts",
+      "types": "./src/const.ts"
     },
     "./package.json": "./package.json"
   },

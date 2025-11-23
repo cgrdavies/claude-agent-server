@@ -1,42 +1,12 @@
-import {
-  FilesystemEventType,
-  Sandbox,
-  type FilesystemEvent,
-  type WatchHandle,
-} from 'e2b'
+import { Sandbox, type FilesystemEvent } from 'e2b'
 
-import { WORKSPACE_DIR_NAME } from '../../server/const'
+import { DEFAULT_TEMPLATE, SERVER_PORT, WORKSPACE_DIR_NAME } from './const'
 import type {
-  QueryConfig,
-  WSInputMessage,
-  WSOutputMessage,
-} from '../../server/message-types'
-
-export type {
-  QueryConfig,
-  WSInputMessage,
-  WSOutputMessage,
-  FilesystemEvent,
+  ClientOptions,
   WatchHandle,
-}
-export { FilesystemEventType }
-
-export const DEFAULT_TEMPLATE = 'claude-agent-server'
-export const SERVER_PORT = 3000
-
-/**
- * Configuration options for the Claude Agent Client
- */
-export interface ClientOptions extends Partial<QueryConfig> {
-  /** E2B API key */
-  e2bApiKey?: string
-  /** E2B template name. Defaults to 'claude-agent-server' */
-  template?: string
-  /** Timeout in milliseconds. Defaults to 5 minutes */
-  timeoutMs?: number
-  /** Enable debug logging */
-  debug?: boolean
-}
+  WSInputMessage,
+  WSOutputMessage,
+} from './types'
 
 export class ClaudeAgentClient {
   private sandbox?: Sandbox
