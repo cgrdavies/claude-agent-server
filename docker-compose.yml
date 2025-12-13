@@ -10,8 +10,7 @@ services:
       - workspace-data:/home/bun/agent-workspace
     environment:
       - NODE_ENV=production
-      # Set in Dokploy:
-      # - CLAUDE_CREDENTIALS_BASE64
+      - CLAUDE_CREDENTIALS_BASE64=${CLAUDE_CREDENTIALS_BASE64:-}
     networks:
       - dokploy-network
     healthcheck:
