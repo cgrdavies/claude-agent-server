@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Agent Client - Self-contained interactive client
-# Usage: curl -fsSL https://raw.githubusercontent.com/cgrdavies/claude-agent-server/main/claude-client.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/cgrdavies/claude-agent-server/main/claude-client.sh -o /tmp/claude-client.sh && bash /tmp/claude-client.sh
 
 set -e
 
