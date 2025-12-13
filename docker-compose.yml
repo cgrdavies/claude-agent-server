@@ -4,15 +4,19 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      # Mount .claude configuration from host for Claude Max authentication
-      - ~/.claude:/home/bun/.claude
-      # Mount workspace for persistence (optional)
-      - ./workspace:/home/bun/agent-workspace
+      # Workspace volume for persistence
+      - workspace-data:/home/bun/agent-workspace
     environment:
       - NODE_ENV=production
+      # Set these in Dokploy:
+      # - CLAUDE_CREDENTIALS={"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":...,"scopes":[...],"subscriptionType":"max"}}
+      # - CLAUDE_SETTINGS={"theme":"dark",...}  (optional)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
     restart: unless-stopped
+
+volumes:
+  workspace-data:

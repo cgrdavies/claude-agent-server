@@ -22,6 +22,9 @@ RUN bun install --frozen-lockfile
 # Copy source code
 COPY . .
 
+# Copy and setup entrypoint (must be executable and owned by root for security)
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
+
 # Ensure correct ownership
 RUN chown -R bun:bun /home/bun/app
 
@@ -35,5 +38,6 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:4000/health || exit 1
 
-# Start server
+# Use entrypoint to setup credentials, then start server
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bun", "run", "start:server"]
