@@ -1,21 +1,12 @@
-#!/usr/bin/env bash
-# Claude Agent Client - Self-contained interactive client
-# Usage: curl -fsSL https://raw.githubusercontent.com/cgrdavies/claude-agent-server/main/claude-client.sh -o /tmp/claude-client.sh && bash /tmp/claude-client.sh
-
-set -e
-
-VENV_DIR="${TMPDIR:-/tmp}/claude-client-venv"
-SCRIPT_FILE="${TMPDIR:-/tmp}/claude-client-script.py"
-
-# Create venv if needed
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Setting up environment..."
-    python3 -m venv "$VENV_DIR"
-    "$VENV_DIR/bin/pip" install -q websockets
-fi
-
-# Write Python script to temp file
-cat > "$SCRIPT_FILE" << 'PYTHON_EOF'
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["websockets"]
+# ///
+"""
+Claude Agent Client - Interactive terminal client
+Usage: uv run https://raw.githubusercontent.com/cgrdavies/claude-agent-server/main/claude-client.py
+"""
 import asyncio
 import json
 import os
@@ -102,7 +93,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nGoodbye!")
-PYTHON_EOF
-
-# Run the script
-exec "$VENV_DIR/bin/python" "$SCRIPT_FILE"
