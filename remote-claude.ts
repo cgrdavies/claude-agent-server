@@ -9,22 +9,19 @@ const rl = readline.createInterface({
   output: process.stdout,
 })
 
-let client: ClaudeAgentClient
+let client: ClaudeAgentClient | null = null
 let sessionId = crypto.randomUUID()
 let isWaiting = false
 
-async function main() {
-  console.log(`\x1b[36mConnecting to ${SERVER_URL}...\x1b[0m`)
-
-  client = new ClaudeAgentClient({
+async function connect(): Promise<ClaudeAgentClient> {
+  const newClient = new ClaudeAgentClient({
     connectionUrl: SERVER_URL,
     systemPrompt: process.env.SYSTEM_PROMPT || 'You are a helpful assistant.',
   })
 
-  client.onMessage((message) => {
+  newClient.onMessage((message) => {
     if (message.type === 'connected') {
-      console.log('\x1b[32mConnected!\x1b[0m\n')
-      prompt()
+      // Connection ready
     } else if (message.type === 'sdk_message') {
       const msg = message.data
       if (msg.type === 'assistant') {
@@ -45,13 +42,20 @@ async function main() {
       console.error(`\x1b[31mError: ${message.error}\x1b[0m`)
       isWaiting = false
       prompt()
-    } else if (message.type === 'info') {
-      // Skip info messages for cleaner output
     }
   })
 
+  await newClient.start()
+  return newClient
+}
+
+async function main() {
+  console.log(`\x1b[36mConnecting to ${SERVER_URL}...\x1b[0m`)
+
   try {
-    await client.start()
+    client = await connect()
+    console.log('\x1b[32mConnected!\x1b[0m\n')
+    prompt()
   } catch (err) {
     console.error('\x1b[31mFailed to connect:\x1b[0m', err)
     process.exit(1)
@@ -93,15 +97,38 @@ Commands:
     }
 
     isWaiting = true
-    client.send({
-      type: 'user_message',
-      data: {
-        type: 'user',
-        message: { role: 'user', content: trimmed },
-        parent_tool_use_id: null,
-        session_id: sessionId,
-      },
-    })
+
+    // Reconnect if needed
+    try {
+      client!.send({
+        type: 'user_message',
+        data: {
+          type: 'user',
+          message: { role: 'user', content: trimmed },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        },
+      })
+    } catch (err) {
+      // Reconnect and retry
+      console.log('\x1b[33mReconnecting...\x1b[0m')
+      try {
+        client = await connect()
+        client.send({
+          type: 'user_message',
+          data: {
+            type: 'user',
+            message: { role: 'user', content: trimmed },
+            parent_tool_use_id: null,
+            session_id: sessionId,
+          },
+        })
+      } catch (retryErr) {
+        console.error('\x1b[31mFailed to reconnect:\x1b[0m', retryErr)
+        isWaiting = false
+        prompt()
+      }
+    }
   })
 }
 
