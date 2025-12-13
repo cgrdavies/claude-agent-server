@@ -8,9 +8,9 @@ services:
       - workspace-data:/home/bun/agent-workspace
     environment:
       - NODE_ENV=production
-      # Set these in Dokploy:
-      # - CLAUDE_CREDENTIALS={"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":...,"scopes":[...],"subscriptionType":"max"}}
-      # - CLAUDE_SETTINGS={"theme":"dark",...}  (optional)
+      # Set in Dokploy (base64 encoded):
+      # - CLAUDE_CREDENTIALS_BASE64=$(cat ~/.claude/.credentials.json | base64 -w0)
+      # - CLAUDE_SETTINGS_BASE64=$(cat ~/.claude/settings.json | base64 -w0)  (optional)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s
