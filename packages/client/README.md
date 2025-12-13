@@ -1,13 +1,11 @@
-# @claude-agent/client
+# @dzhng/claude-agent
 
-A TypeScript client library for connecting to Claude Agent Server with E2B sandbox support.
+A TypeScript client library for connecting to Claude Agent Server.
 
 ## Installation
 
 ```bash
 npm install @dzhng/claude-agent
-# or
-yarn add @dzhng/claude-agent
 # or
 bun add @dzhng/claude-agent
 ```
@@ -20,39 +18,57 @@ bun add @dzhng/claude-agent
 import { ClaudeAgentClient } from '@dzhng/claude-agent'
 
 const client = new ClaudeAgentClient({
-  e2bApiKey: process.env.E2B_API_KEY,
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  connectionUrl: 'http://localhost:4000', // or your deployed server URL
   debug: true,
 })
 
-// Start the client (creates E2B sandbox and connects)
+// Start the client
 await client.start()
 
 // Listen for messages from the agent
 client.onMessage(message => {
-  console.log('Received:', message)
+  if (message.type === 'sdk_message') {
+    console.log('Claude:', message.data)
+  }
 })
 
 // Send a message to the agent
 client.send({
   type: 'user_message',
-  data: { content: 'Hello, Claude!' },
+  data: {
+    type: 'user',
+    session_id: 'my-session',
+    message: {
+      role: 'user',
+      content: 'Hello, Claude!',
+    },
+  },
 })
 
 // Clean up when done
 await client.stop()
 ```
 
-### Use a Custom E2B Template
+### File Operations
 
 ```typescript
-const client = new ClaudeAgentClient({
-  template: 'my-custom-template', // Your custom E2B template name
-  e2bApiKey: process.env.E2B_API_KEY,
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-})
+// Write a file
+await client.writeFile('test.txt', 'Hello, world!')
 
-await client.start()
+// Read a file
+const content = await client.readFile('test.txt')
+
+// List files
+const files = await client.listFiles('.')
+
+// Check if file exists
+const exists = await client.exists('test.txt')
+
+// Create directory
+await client.mkdir('my-folder')
+
+// Remove file
+await client.removeFile('test.txt')
 ```
 
 ## API Reference
@@ -63,13 +79,11 @@ await client.start()
 
 ```typescript
 interface ClientOptions {
-  // Required (unless using environment variables)
-  anthropicApiKey?: string
-  e2bApiKey?: string
+  // Required
+  connectionUrl: string // Server URL (e.g., 'https://your-server.dokploy.com')
 
-  // Configuration
-  template?: string // E2B template name, defaults to 'claude-agent-server'
-  timeoutMs?: number // Sandbox timeout, defaults to 5 minutes
+  // Optional
+  anthropicApiKey?: string // Passed to server for API calls
   debug?: boolean // Enable debug logging
 
   // Query Configuration (passed to server)
@@ -87,21 +101,17 @@ interface ClientOptions {
 - **`async start()`** - Initialize the client and connect to the server
 - **`send(message: WSInputMessage)`** - Send a message to the agent
 - **`onMessage(handler: (message: WSOutputMessage) => void)`** - Register a message handler (returns unsubscribe function)
-- **`async writeFile(path, content)`** - Write a file (string or Blob) to the sandbox
+- **`async writeFile(path, content)`** - Write a file (string or Blob)
 - **`async readFile(path, format)`** - Read a file as 'text' or 'blob'
 - **`async removeFile(path)`** - Delete a file or directory
 - **`async listFiles(path?)`** - List directory contents
+- **`async mkdir(path)`** - Create a directory
+- **`async exists(path)`** - Check if file/directory exists
 - **`async stop()`** - Disconnect and clean up resources
 
 ## Message Types
 
 ```typescript
-import type {
-  AgentDefinition,
-  SDKMessage,
-  SDKUserMessage,
-} from '@anthropic-ai/claude-agent-sdk'
-
 // Input messages you can send
 type WSInputMessage =
   | { type: 'user_message'; data: SDKUserMessage }
@@ -117,8 +127,8 @@ type WSOutputMessage =
 
 ## Environment Variables
 
-- `E2B_API_KEY` - Your E2B API key (required)
-- `ANTHROPIC_API_KEY` - Your Anthropic API key (required)
+- `CONNECTION_URL` - Server URL (optional, can be passed in constructor)
+- `ANTHROPIC_API_KEY` - Your Anthropic API key (optional if using Claude Max)
 
 ## License
 

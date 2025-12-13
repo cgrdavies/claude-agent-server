@@ -8,6 +8,7 @@ import {
 import { type ServerWebSocket } from 'bun'
 
 import { SERVER_PORT, WORKSPACE_DIR_NAME } from './const'
+import * as fileHandler from './file-handler'
 import { handleMessage } from './message-handler'
 import { type QueryConfig, type WSOutputMessage } from './message-types'
 
@@ -96,7 +97,7 @@ async function processMessages() {
 // Create WebSocket server
 const server = Bun.serve({
   port: SERVER_PORT,
-  fetch(req, server) {
+  async fetch(req, server) {
     const url = new URL(req.url)
 
     // Configuration endpoint
@@ -115,6 +116,110 @@ const server = Bun.serve({
     // Get current configuration
     if (url.pathname === '/config' && req.method === 'GET') {
       return Response.json({ config: queryConfig })
+    }
+
+    // Health check endpoint
+    if (url.pathname === '/health' && req.method === 'GET') {
+      return Response.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    // File operations endpoints
+    // POST /files/write - Write file
+    if (url.pathname === '/files/write' && req.method === 'POST') {
+      const path = url.searchParams.get('path')
+      if (!path) {
+        return Response.json({ error: 'Path is required' }, { status: 400 })
+      }
+      try {
+        const contentType = req.headers.get('content-type') || ''
+        let content: string | Blob
+        if (contentType.includes('application/json')) {
+          const body = (await req.json()) as { content: string }
+          content = body.content
+        } else {
+          content = await req.blob()
+        }
+        await fileHandler.writeFile(path, content)
+        return Response.json({ success: true })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 500 })
+      }
+    }
+
+    // GET /files/read - Read file
+    if (url.pathname === '/files/read' && req.method === 'GET') {
+      const path = url.searchParams.get('path')
+      const format = (url.searchParams.get('format') || 'text') as 'text' | 'blob'
+      if (!path) {
+        return Response.json({ error: 'Path is required' }, { status: 400 })
+      }
+      try {
+        const content = await fileHandler.readFile(path, format)
+        if (format === 'blob') {
+          return new Response(content as Blob)
+        }
+        return new Response(content as string, {
+          headers: { 'Content-Type': 'text/plain' },
+        })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 404 })
+      }
+    }
+
+    // DELETE /files/remove - Remove file/directory
+    if (url.pathname === '/files/remove' && req.method === 'DELETE') {
+      const path = url.searchParams.get('path')
+      if (!path) {
+        return Response.json({ error: 'Path is required' }, { status: 400 })
+      }
+      try {
+        await fileHandler.removeFile(path)
+        return Response.json({ success: true })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 500 })
+      }
+    }
+
+    // GET /files/list - List directory contents
+    if (url.pathname === '/files/list' && req.method === 'GET') {
+      const path = url.searchParams.get('path') || '.'
+      try {
+        const entries = await fileHandler.listFiles(path)
+        return Response.json({ entries })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 500 })
+      }
+    }
+
+    // POST /files/mkdir - Create directory
+    if (url.pathname === '/files/mkdir' && req.method === 'POST') {
+      const path = url.searchParams.get('path')
+      if (!path) {
+        return Response.json({ error: 'Path is required' }, { status: 400 })
+      }
+      try {
+        await fileHandler.makeDir(path)
+        return Response.json({ success: true })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 500 })
+      }
+    }
+
+    // GET /files/exists - Check if file/directory exists
+    if (url.pathname === '/files/exists' && req.method === 'GET') {
+      const path = url.searchParams.get('path')
+      if (!path) {
+        return Response.json({ error: 'Path is required' }, { status: 400 })
+      }
+      try {
+        const exists = await fileHandler.exists(path)
+        return Response.json({ exists })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 500 })
+      }
     }
 
     // WebSocket endpoint

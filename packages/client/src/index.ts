@@ -1,87 +1,69 @@
-import { Sandbox, type FilesystemEvent } from 'e2b'
-
-import { DEFAULT_TEMPLATE, SERVER_PORT, WORKSPACE_DIR_NAME } from './const'
 import type {
   ClientOptions,
-  WatchHandle,
+  EntryInfo,
   WSInputMessage,
   WSOutputMessage,
 } from './types'
 
+// Re-export types for convenience
+export type { ClientOptions, EntryInfo, WSInputMessage, WSOutputMessage }
+export type { QueryConfig, McpRemoteServerConfig } from './types'
+
 export class ClaudeAgentClient {
-  private sandbox?: Sandbox
   private ws?: WebSocket
   private options: ClientOptions
   private messageHandlers: ((message: WSOutputMessage) => void)[] = []
+  private baseUrl: string
 
-  constructor(options: ClientOptions = {}) {
-    this.options = {
-      template: DEFAULT_TEMPLATE,
-      timeoutMs: 5 * 60 * 1000,
-      ...options,
-    }
+  constructor(options: ClientOptions) {
+    this.options = options
+    // Normalize URL (remove trailing slash)
+    this.baseUrl = options.connectionUrl.replace(/\/$/, '')
   }
 
   async start() {
-    const apiKey = this.options.e2bApiKey || process.env.E2B_API_KEY
     const anthropicApiKey =
       this.options.anthropicApiKey || process.env.ANTHROPIC_API_KEY
 
-    if (!apiKey) {
-      throw new Error('E2B_API_KEY is required')
-    }
-
-    if (!anthropicApiKey) {
-      throw new Error('ANTHROPIC_API_KEY is required')
-    }
+    const configUrl = `${this.baseUrl}/config`
+    const wsProtocol = this.baseUrl.startsWith('https') ? 'wss' : 'ws'
+    const wsUrl = `${wsProtocol}://${new URL(this.baseUrl).host}/ws`
 
     if (this.options.debug) {
-      console.log(`🚀 Creating sandbox from ${this.options.template}...`)
+      console.log(`Configuring server at ${configUrl}...`)
     }
 
-    this.sandbox = await Sandbox.create(this.options.template!, {
-      apiKey,
-      timeoutMs: this.options.timeoutMs,
-    })
-
-    if (this.options.debug) {
-      console.log(`✅ Sandbox created: ${this.sandbox.sandboxId}`)
-    }
-
-    const sandboxHost = this.sandbox.getHost(SERVER_PORT)
-    const configUrl = `https://${sandboxHost}/config`
-    const wsUrl = `wss://${sandboxHost}/ws`
-
-    if (this.options.debug) {
-      console.log(`📡 Configuring server at ${configUrl}...`)
+    const configBody: Record<string, unknown> = { ...this.options }
+    delete configBody.connectionUrl
+    delete configBody.debug
+    if (anthropicApiKey) {
+      configBody.anthropicApiKey = anthropicApiKey
     }
 
     const configResponse = await fetch(configUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        anthropicApiKey,
-        ...this.options,
-      }),
+      body: JSON.stringify(configBody),
     })
 
     if (!configResponse.ok) {
       const error = await configResponse.text()
-      if (this.sandbox) {
-        await this.sandbox.kill()
-      }
       throw new Error(`Failed to configure server: ${error}`)
     }
 
     if (this.options.debug) {
-      console.log('🔌 Connecting to WebSocket...')
+      console.log('Connecting to WebSocket...')
     }
 
+    return this.connectWebSocket(wsUrl)
+  }
+
+  private connectWebSocket(wsUrl: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.ws = new WebSocket(wsUrl)
 
       this.ws.onopen = () => {
-        if (this.options.debug) console.log('✅ Connected to Claude Agent SDK')
+        if (this.options.debug) console.log('Connected to Claude Agent SDK')
         resolve()
       }
 
@@ -100,14 +82,14 @@ export class ClaudeAgentClient {
       }
 
       this.ws.onclose = () => {
-        if (this.options.debug) console.log('👋 Disconnected')
+        if (this.options.debug) console.log('Disconnected')
       }
     })
   }
 
   private handleMessage(message: WSOutputMessage) {
     if (this.options.debug) {
-      console.log('📨 Received message:', JSON.stringify(message, null, 2))
+      console.log('Received message:', JSON.stringify(message, null, 2))
     }
     this.messageHandlers.forEach(handler => handler(message))
   }
@@ -126,72 +108,71 @@ export class ClaudeAgentClient {
     this.ws.send(JSON.stringify(message))
   }
 
-  private resolvePath(path: string): string {
-    // If path starts with /, it's absolute, otherwise make it relative to workspace
-    if (path.startsWith('/')) {
-      return path
-    }
-    if (path === '.') {
-      return `/home/user/${WORKSPACE_DIR_NAME}`
-    }
-    return `/home/user/${WORKSPACE_DIR_NAME}/${path}`
-  }
-
+  // File operations via REST API
   async writeFile(path: string, content: string | Blob) {
-    if (!this.sandbox) {
-      throw new Error('Sandbox not initialized')
+    const url = `${this.baseUrl}/files/write?path=${encodeURIComponent(path)}`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers:
+        content instanceof Blob ? {} : { 'Content-Type': 'application/json' },
+      body: content instanceof Blob ? content : JSON.stringify({ content }),
+    })
+    if (!response.ok) {
+      throw new Error(`Failed to write file: ${await response.text()}`)
     }
-    return this.sandbox.files.write(this.resolvePath(path), content)
   }
 
-  async readFile(
-    path: string,
-    format: 'text' | 'blob',
-  ): Promise<string | Blob> {
-    if (!this.sandbox) {
-      throw new Error('Sandbox not initialized')
+  async readFile(path: string, format: 'text' | 'blob' = 'text'): Promise<string | Blob> {
+    const url = `${this.baseUrl}/files/read?path=${encodeURIComponent(path)}&format=${format}`
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to read file: ${await response.text()}`)
     }
-    const resolvedPath = this.resolvePath(path)
     if (format === 'blob') {
-      return this.sandbox.files.read(resolvedPath, { format })
+      return response.blob()
     }
-    return this.sandbox.files.read(resolvedPath)
+    return response.text()
   }
 
   async removeFile(path: string) {
-    if (!this.sandbox) {
-      throw new Error('Sandbox not initialized')
+    const url = `${this.baseUrl}/files/remove?path=${encodeURIComponent(path)}`
+    const response = await fetch(url, { method: 'DELETE' })
+    if (!response.ok) {
+      throw new Error(`Failed to remove file: ${await response.text()}`)
     }
-    return this.sandbox.files.remove(this.resolvePath(path))
   }
 
-  async listFiles(path = '.') {
-    if (!this.sandbox) {
-      throw new Error('Sandbox not initialized')
+  async listFiles(path = '.'): Promise<EntryInfo[]> {
+    const url = `${this.baseUrl}/files/list?path=${encodeURIComponent(path)}`
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to list files: ${await response.text()}`)
     }
-    return this.sandbox.files.list(this.resolvePath(path))
+    const data = (await response.json()) as { entries: EntryInfo[] }
+    return data.entries
   }
 
-  async watchDir(
-    path: string,
-    onEvent: (event: FilesystemEvent) => void | Promise<void>,
-    opts?: {
-      recursive?: boolean
-      onExit?: (err?: Error) => void | Promise<void>
-    },
-  ): Promise<WatchHandle> {
-    if (!this.sandbox) {
-      throw new Error('Sandbox not initialized')
+  async mkdir(path: string) {
+    const url = `${this.baseUrl}/files/mkdir?path=${encodeURIComponent(path)}`
+    const response = await fetch(url, { method: 'POST' })
+    if (!response.ok) {
+      throw new Error(`Failed to create directory: ${await response.text()}`)
     }
-    return this.sandbox.files.watchDir(this.resolvePath(path), onEvent, opts)
+  }
+
+  async exists(path: string): Promise<boolean> {
+    const url = `${this.baseUrl}/files/exists?path=${encodeURIComponent(path)}`
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to check existence: ${await response.text()}`)
+    }
+    const data = (await response.json()) as { exists: boolean }
+    return data.exists
   }
 
   async stop() {
     if (this.ws) {
       this.ws.close()
-    }
-    if (this.sandbox) {
-      await this.sandbox.kill()
     }
   }
 }

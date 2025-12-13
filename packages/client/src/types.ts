@@ -6,12 +6,12 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 
-// Re-export e2b types
-export {
-  FilesystemEventType,
-  type FilesystemEvent,
-  type WatchHandle,
-} from 'e2b'
+// Entry info type for file listings
+export type EntryInfo = {
+  name: string
+  path: string
+  type: 'file' | 'dir'
+}
 
 // WebSocket message types
 export type WSInputMessage =
@@ -49,12 +49,11 @@ export type QueryConfig = {
  * Configuration options for the Claude Agent Client
  */
 export interface ClientOptions extends Partial<QueryConfig> {
-  /** E2B API key */
-  e2bApiKey?: string
-  /** E2B template name. Defaults to 'claude-agent-server' */
-  template?: string
-  /** Timeout in milliseconds. Defaults to 5 minutes */
-  timeoutMs?: number
+  /**
+   * Connection URL (e.g., 'https://my-server.dokploy.com')
+   */
+  connectionUrl: string
+
   /** Enable debug logging */
   debug?: boolean
 }
