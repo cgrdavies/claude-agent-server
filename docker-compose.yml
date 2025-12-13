@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   claude-agent-server:
     build: .
@@ -7,9 +5,9 @@ services:
       - "4000:4000"
     volumes:
       # Mount .claude configuration from host for Claude Max authentication
-      - ~/.claude:/home/user/.claude:ro
+      - ~/.claude:/home/bun/.claude
       # Mount workspace for persistence (optional)
-      - ./workspace:/home/user/agent-workspace
+      - ./workspace:/home/bun/agent-workspace
     environment:
       - NODE_ENV=production
     healthcheck:
