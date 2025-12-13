@@ -5,6 +5,7 @@
 set -e
 
 VENV_DIR="${TMPDIR:-/tmp}/claude-client-venv"
+SCRIPT_FILE="${TMPDIR:-/tmp}/claude-client-script.py"
 
 # Create venv if needed
 if [ ! -d "$VENV_DIR" ]; then
@@ -13,8 +14,8 @@ if [ ! -d "$VENV_DIR" ]; then
     "$VENV_DIR/bin/pip" install -q websockets
 fi
 
-# Run the client
-"$VENV_DIR/bin/python" << 'PYTHON_EOF'
+# Write Python script to temp file
+cat > "$SCRIPT_FILE" << 'PYTHON_EOF'
 import asyncio
 import json
 import os
@@ -102,3 +103,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nGoodbye!")
 PYTHON_EOF
+
+# Run the script
+exec "$VENV_DIR/bin/python" "$SCRIPT_FILE"
