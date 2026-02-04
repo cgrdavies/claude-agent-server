@@ -255,6 +255,7 @@ const server = Bun.serve({
         const sessions = entries
           .filter(e => e.endsWith('.jsonl'))
           .map(e => e.replace('.jsonl', ''))
+          .filter(id => !id.startsWith('agent-'))
         return Response.json({ sessions })
       } catch (error) {
         return Response.json({ error: String(error) }, { status: 500 })
