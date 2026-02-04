@@ -1,20 +1,22 @@
-import * as Y from 'yjs'
 import { getSchema } from '@tiptap/core'
-import StarterKit from '@tiptap/starter-kit'
 import { Markdown, MarkdownManager } from '@tiptap/markdown'
+import StarterKit from '@tiptap/starter-kit'
 import { renderToMarkdown } from '@tiptap/static-renderer/pm/markdown'
 import {
   prosemirrorJSONToYXmlFragment,
   yXmlFragmentToProsemirrorJSON,
 } from 'y-prosemirror'
+import * as Y from 'yjs'
 
-import db from './db'
+import { withRLS } from './lib/db'
 
 export type DocumentInfo = {
   id: string
   name: string
-  createdAt: string
-  updatedAt: string
+  workspace_id: string
+  created_by: string
+  created_at: string
+  updated_at: string
 }
 
 // Shared Tiptap extensions and schema for markdown <-> ProseMirror conversion
@@ -59,42 +61,72 @@ function fragmentToMarkdown(fragment: Y.XmlFragment): string {
 // In-memory cache of active documents
 const docs = new Map<string, Y.Doc>()
 
+// Debounce timers for persisting documents
+const persistTimers = new Map<string, Timer>()
+const PERSIST_DEBOUNCE_MS = 500
+
+function cancelPendingPersist(id: string): void {
+  const timer = persistTimers.get(id)
+  if (timer) {
+    clearTimeout(timer)
+    persistTimers.delete(id)
+  }
+}
+
 /**
  * Get or load a Y.Doc from cache/database.
- * Returns null if document doesn't exist.
+ * Returns null if document doesn't exist or isn't in the user's workspace.
  */
-export function getDoc(id: string): Y.Doc | null {
+export async function getDoc(
+  userId: string,
+  workspaceId: string,
+  id: string,
+): Promise<Y.Doc | null> {
   if (docs.has(id)) return docs.get(id)!
 
-  const row = db.query('SELECT state FROM documents WHERE id = ?').get(id) as
-    | { state: Buffer }
-    | null
+  const rows = await withRLS(
+    userId,
+    sql =>
+      sql`SELECT yjs_state FROM documents
+        WHERE id = ${id} AND workspace_id = ${workspaceId}
+        LIMIT 1`,
+  )
+  const row = rows[0] as { yjs_state: Buffer | Uint8Array } | undefined
   if (!row) return null
 
   const doc = new Y.Doc()
-  Y.applyUpdate(doc, new Uint8Array(row.state))
+  const state =
+    row.yjs_state instanceof Buffer
+      ? new Uint8Array(row.yjs_state)
+      : new Uint8Array(row.yjs_state)
+  Y.applyUpdate(doc, state)
 
-  // Listen for updates and persist
-  doc.on('update', () => persistDoc(id, doc))
+  // Listen for updates and persist (debounced)
+  doc.on('update', () => debouncedPersist(userId, id, doc))
 
   docs.set(id, doc)
   return doc
 }
 
 /**
+ * Get a Y.Doc from cache only (no DB load).
+ * Used by WebSocket sync handler where the doc should already be loaded.
+ */
+export function getDocFromCache(id: string): Y.Doc | null {
+  return docs.get(id) ?? null
+}
+
+/**
  * Create a new document with optional initial markdown content.
  * Stores content as a Y.XmlFragment('default') containing ProseMirror nodes.
+ * Returns the document info including generated ID.
  */
-export function createDoc(
-  id: string,
+export async function createDoc(
+  userId: string,
+  workspaceId: string,
   name: string,
   content?: string,
-): Y.Doc {
-  if (docs.has(id)) throw new Error(`Document ${id} already exists`)
-
-  const existing = db.query('SELECT id FROM documents WHERE id = ?').get(id)
-  if (existing) throw new Error(`Document ${id} already exists`)
-
+): Promise<DocumentInfo> {
   const doc = new Y.Doc()
   const fragment = doc.getXmlFragment('default')
 
@@ -104,48 +136,94 @@ export function createDoc(
     prosemirrorJSONToYXmlFragment(schema, EMPTY_DOC_JSON, fragment)
   }
 
-  const state = Y.encodeStateAsUpdate(doc)
-  db.query(
-    'INSERT INTO documents (id, name, state) VALUES (?, ?, ?)',
-  ).run(id, name, Buffer.from(state))
+  const state = Buffer.from(Y.encodeStateAsUpdate(doc))
+  const id = crypto.randomUUID()
 
-  doc.on('update', () => persistDoc(id, doc))
+  const rows = await withRLS(
+    userId,
+    sql =>
+      sql`INSERT INTO documents (id, workspace_id, name, yjs_state, created_by)
+        VALUES (${id}, ${workspaceId}, ${name}, ${state}, ${userId})
+        RETURNING id, workspace_id, name, created_by, created_at, updated_at`,
+  )
+  const info = rows[0] as DocumentInfo
+
+  doc.on('update', () => debouncedPersist(userId, id, doc))
   docs.set(id, doc)
 
-  return doc
+  return info
 }
 
 /**
  * Delete a document.
  */
-export function deleteDoc(id: string): void {
+export async function deleteDoc(
+  userId: string,
+  workspaceId: string,
+  id: string,
+): Promise<boolean> {
   const doc = docs.get(id)
   if (doc) {
     doc.destroy()
     docs.delete(id)
   }
-  db.query('DELETE FROM documents WHERE id = ?').run(id)
+
+  // Cancel any pending persist
+  const timer = persistTimers.get(id)
+  if (timer) {
+    clearTimeout(timer)
+    persistTimers.delete(id)
+  }
+
+  const result = await withRLS(
+    userId,
+    sql =>
+      sql`DELETE FROM documents WHERE id = ${id} AND workspace_id = ${workspaceId} RETURNING id`,
+  )
+  return result.length > 0
 }
 
 /**
- * List all documents.
+ * List all documents in a workspace.
  */
-export function listDocs(): DocumentInfo[] {
-  const rows = db.query(
-    'SELECT id, name, created_at as createdAt, updated_at as updatedAt FROM documents ORDER BY updated_at DESC',
-  ).all() as DocumentInfo[]
-  return rows
+export async function listDocs(
+  userId: string,
+  workspaceId: string,
+): Promise<DocumentInfo[]> {
+  const rows = await withRLS(
+    userId,
+    sql =>
+      sql`SELECT id, workspace_id, name, created_by, created_at, updated_at
+        FROM documents
+        WHERE workspace_id = ${workspaceId}
+        ORDER BY updated_at DESC`,
+  )
+  return rows as unknown as DocumentInfo[]
 }
 
 /**
  * Read document content as markdown string.
  * Converts the Y.XmlFragment to ProseMirror JSON, then to markdown.
  */
-export function readDocAsText(id: string): string | null {
-  const doc = getDoc(id)
+export async function readDocAsText(
+  userId: string,
+  workspaceId: string,
+  id: string,
+): Promise<{ name: string; content: string } | null> {
+  const doc = await getDoc(userId, workspaceId, id)
   if (!doc) return null
+
+  // Get the name from DB
+  const rows = await withRLS(
+    userId,
+    sql =>
+      sql`SELECT name FROM documents WHERE id = ${id} AND workspace_id = ${workspaceId} LIMIT 1`,
+  )
+  const row = rows[0] as { name: string } | undefined
+  if (!row) return null
+
   const fragment = doc.getXmlFragment('default')
-  return fragmentToMarkdown(fragment)
+  return { name: row.name, content: fragmentToMarkdown(fragment) }
 }
 
 /**
@@ -154,12 +232,14 @@ export function readDocAsText(id: string): string | null {
  * the fragment content atomically.
  * Returns true if the edit was applied, false if old_text was not found.
  */
-export function editDoc(
+export async function editDoc(
+  userId: string,
+  workspaceId: string,
   id: string,
   oldText: string,
   newText: string,
-): boolean {
-  const doc = getDoc(id)
+): Promise<boolean> {
+  const doc = await getDoc(userId, workspaceId, id)
   if (!doc) throw new Error(`Document ${id} not found`)
 
   const fragment = doc.getXmlFragment('default')
@@ -167,7 +247,8 @@ export function editDoc(
   const index = content.indexOf(oldText)
   if (index === -1) return false
 
-  const edited = content.slice(0, index) + newText + content.slice(index + oldText.length)
+  const edited =
+    content.slice(0, index) + newText + content.slice(index + oldText.length)
 
   doc.transact(() => {
     // Clear existing content
@@ -178,6 +259,9 @@ export function editDoc(
     populateFragment(fragment, edited)
   })
 
+  cancelPendingPersist(id)
+  await persistDoc(userId, id, doc)
+
   return true
 }
 
@@ -186,8 +270,13 @@ export function editDoc(
  * Parses the appended markdown to ProseMirror nodes and appends them
  * to the existing XmlFragment.
  */
-export function appendDoc(id: string, content: string): void {
-  const doc = getDoc(id)
+export async function appendDoc(
+  userId: string,
+  workspaceId: string,
+  id: string,
+  content: string,
+): Promise<void> {
+  const doc = await getDoc(userId, workspaceId, id)
   if (!doc) throw new Error(`Document ${id} not found`)
 
   const fragment = doc.getXmlFragment('default')
@@ -202,25 +291,104 @@ export function appendDoc(id: string, content: string): void {
     }
     populateFragment(fragment, combined)
   })
+
+  cancelPendingPersist(id)
+  await persistDoc(userId, id, doc)
 }
 
 /**
- * Persist a document's current state to SQLite.
+ * Replace a document's entire content with new markdown.
+ * Clears the XmlFragment and re-populates from the new markdown.
  */
-function persistDoc(id: string, doc: Y.Doc): void {
-  const state = Y.encodeStateAsUpdate(doc)
-  db.query(
-    "UPDATE documents SET state = ?, updated_at = datetime('now') WHERE id = ?",
-  ).run(Buffer.from(state), id)
+export async function replaceDocContent(
+  userId: string,
+  workspaceId: string,
+  id: string,
+  markdown: string,
+): Promise<void> {
+  const doc = await getDoc(userId, workspaceId, id)
+  if (!doc) throw new Error(`Document ${id} not found`)
+
+  const fragment = doc.getXmlFragment('default')
+
+  doc.transact(() => {
+    while (fragment.length > 0) {
+      fragment.delete(0, 1)
+    }
+    populateFragment(fragment, markdown)
+  })
+
+  cancelPendingPersist(id)
+  await persistDoc(userId, id, doc)
+}
+
+/**
+ * Update a document's name in the database.
+ */
+export async function renameDoc(
+  userId: string,
+  workspaceId: string,
+  id: string,
+  name: string,
+): Promise<void> {
+  await withRLS(
+    userId,
+    sql =>
+      sql`UPDATE documents SET name = ${name}, updated_at = now()
+        WHERE id = ${id} AND workspace_id = ${workspaceId}`,
+  )
+}
+
+/**
+ * Persist a document's current state to Supabase (debounced).
+ */
+function debouncedPersist(userId: string, id: string, doc: Y.Doc): void {
+  const existing = persistTimers.get(id)
+  if (existing) clearTimeout(existing)
+
+  persistTimers.set(
+    id,
+    setTimeout(async () => {
+      persistTimers.delete(id)
+      await persistDoc(userId, id, doc)
+    }, PERSIST_DEBOUNCE_MS),
+  )
+}
+
+/**
+ * Persist a document's current state to Supabase.
+ */
+async function persistDoc(
+  userId: string,
+  id: string,
+  doc: Y.Doc,
+): Promise<void> {
+  const state = Buffer.from(Y.encodeStateAsUpdate(doc))
+  await withRLS(
+    userId,
+    sql =>
+      sql`UPDATE documents SET yjs_state = ${state}, updated_at = now()
+        WHERE id = ${id}`,
+  )
 }
 
 /**
  * Get a document's info without loading the full Y.Doc.
  */
-export function getDocInfo(id: string): DocumentInfo | null {
-  return db.query(
-    'SELECT id, name, created_at as createdAt, updated_at as updatedAt FROM documents WHERE id = ?',
-  ).get(id) as DocumentInfo | null
+export async function getDocInfo(
+  userId: string,
+  workspaceId: string,
+  id: string,
+): Promise<DocumentInfo | null> {
+  const rows = await withRLS(
+    userId,
+    sql =>
+      sql`SELECT id, workspace_id, name, created_by, created_at, updated_at
+        FROM documents
+        WHERE id = ${id} AND workspace_id = ${workspaceId}
+        LIMIT 1`,
+  )
+  return (rows[0] as DocumentInfo | undefined) ?? null
 }
 
 /**
@@ -229,4 +397,23 @@ export function getDocInfo(id: string): DocumentInfo | null {
 export function clearCache(): void {
   docs.forEach(doc => doc.destroy())
   docs.clear()
+  persistTimers.forEach(timer => clearTimeout(timer))
+  persistTimers.clear()
+}
+
+/**
+ * Flush any pending persist operations immediately.
+ * Useful before tests or shutdown.
+ */
+export async function flushPendingPersists(userId: string): Promise<void> {
+  const promises: Promise<void>[] = []
+  for (const [id, timer] of persistTimers) {
+    clearTimeout(timer)
+    persistTimers.delete(id)
+    const doc = docs.get(id)
+    if (doc) {
+      promises.push(persistDoc(userId, id, doc))
+    }
+  }
+  await Promise.all(promises)
 }
