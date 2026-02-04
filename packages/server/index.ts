@@ -1,5 +1,6 @@
 import { homedir } from 'os'
 import { join } from 'path'
+import { readdir } from 'node:fs/promises'
 import {
   query,
   type Options,
@@ -13,6 +14,24 @@ import { handleMessage } from './message-handler'
 import { type QueryConfig, type WSOutputMessage } from './message-types'
 
 const workspaceDirectory = join(homedir(), WORKSPACE_DIR_NAME)
+const claudeProjectsDir = join(homedir(), '.claude', 'projects')
+
+// Find the sessions directory for the workspace cwd
+async function getSessionsDir(): Promise<string | null> {
+  try {
+    const entries = await readdir(claudeProjectsDir)
+    // The SDK slugifies the cwd by replacing / with -
+    const slug = workspaceDirectory.replace(/\//g, '-')
+    const match = entries.find(e => e === slug)
+    if (match) return join(claudeProjectsDir, match)
+    // Fallback: find any entry ending with the workspace dir name
+    const fallback = entries.find(e => e.endsWith(WORKSPACE_DIR_NAME))
+    if (fallback) return join(claudeProjectsDir, fallback)
+    return null
+  } catch {
+    return null
+  }
+}
 
 // Single WebSocket connection (only one allowed)
 let activeConnection: ServerWebSocket | null = null
@@ -220,6 +239,50 @@ const server = Bun.serve({
       try {
         const exists = await fileHandler.exists(path)
         return Response.json({ exists })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 500 })
+      }
+    }
+
+    // GET /sessions - List available sessions
+    if (url.pathname === '/sessions' && req.method === 'GET') {
+      try {
+        const sessionsDir = await getSessionsDir()
+        if (!sessionsDir) {
+          return Response.json({ sessions: [] })
+        }
+        const entries = await readdir(sessionsDir)
+        const sessions = entries
+          .filter(e => e.endsWith('.jsonl'))
+          .map(e => e.replace('.jsonl', ''))
+        return Response.json({ sessions })
+      } catch (error) {
+        return Response.json({ error: String(error) }, { status: 500 })
+      }
+    }
+
+    // GET /sessions/:id - Get session message history
+    if (url.pathname.startsWith('/sessions/') && req.method === 'GET') {
+      const sessionId = url.pathname.slice('/sessions/'.length)
+      if (!sessionId) {
+        return Response.json({ error: 'Session ID is required' }, { status: 400 })
+      }
+      try {
+        const sessionsDir = await getSessionsDir()
+        if (!sessionsDir) {
+          return Response.json({ error: 'No sessions directory found' }, { status: 404 })
+        }
+        const filePath = join(sessionsDir, `${sessionId}.jsonl`)
+        const file = Bun.file(filePath)
+        if (!(await file.exists())) {
+          return Response.json({ error: 'Session not found' }, { status: 404 })
+        }
+        const text = await file.text()
+        const messages = text
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line))
+        return Response.json({ sessionId, messages })
       } catch (error) {
         return Response.json({ error: String(error) }, { status: 500 })
       }

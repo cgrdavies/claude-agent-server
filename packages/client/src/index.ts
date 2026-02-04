@@ -170,6 +170,27 @@ export class ClaudeAgentClient {
     return data.exists
   }
 
+  // Session history via REST API
+  async listSessions(): Promise<string[]> {
+    const url = `${this.baseUrl}/sessions`
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to list sessions: ${await response.text()}`)
+    }
+    const data = (await response.json()) as { sessions: string[] }
+    return data.sessions
+  }
+
+  async getSessionHistory(sessionId: string): Promise<unknown[]> {
+    const url = `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}`
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to get session history: ${await response.text()}`)
+    }
+    const data = (await response.json()) as { sessionId: string; messages: unknown[] }
+    return data.messages
+  }
+
   async stop() {
     if (this.ws) {
       this.ws.close()
