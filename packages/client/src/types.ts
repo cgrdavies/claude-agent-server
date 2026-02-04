@@ -6,11 +6,12 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 
-// Entry info type for file listings
-export type EntryInfo = {
+// Document info type
+export type DocumentInfo = {
+  id: string
   name: string
-  path: string
-  type: 'file' | 'dir'
+  createdAt: string
+  updatedAt: string
 }
 
 // WebSocket message types

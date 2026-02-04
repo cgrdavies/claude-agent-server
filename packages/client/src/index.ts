@@ -1,12 +1,12 @@
 import type {
   ClientOptions,
-  EntryInfo,
+  DocumentInfo,
   WSInputMessage,
   WSOutputMessage,
 } from './types'
 
 // Re-export types for convenience
-export type { ClientOptions, EntryInfo, WSInputMessage, WSOutputMessage }
+export type { ClientOptions, DocumentInfo, WSInputMessage, WSOutputMessage }
 export type { QueryConfig, McpRemoteServerConfig } from './types'
 
 export class ClaudeAgentClient {
@@ -108,66 +108,45 @@ export class ClaudeAgentClient {
     this.ws.send(JSON.stringify(message))
   }
 
-  // File operations via REST API
-  async writeFile(path: string, content: string | Blob) {
-    const url = `${this.baseUrl}/files/write?path=${encodeURIComponent(path)}`
+  // Document operations via REST API
+  async createDocument(name: string, content?: string): Promise<{ id: string; name: string }> {
+    const url = `${this.baseUrl}/docs`
     const response = await fetch(url, {
       method: 'POST',
-      headers:
-        content instanceof Blob ? {} : { 'Content-Type': 'application/json' },
-      body: content instanceof Blob ? content : JSON.stringify({ content }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, content }),
     })
     if (!response.ok) {
-      throw new Error(`Failed to write file: ${await response.text()}`)
+      throw new Error(`Failed to create document: ${await response.text()}`)
     }
+    return response.json() as Promise<{ id: string; name: string }>
   }
 
-  async readFile(path: string, format: 'text' | 'blob' = 'text'): Promise<string | Blob> {
-    const url = `${this.baseUrl}/files/read?path=${encodeURIComponent(path)}&format=${format}`
+  async readDocument(id: string): Promise<{ id: string; name: string; content: string }> {
+    const url = `${this.baseUrl}/docs/${encodeURIComponent(id)}`
     const response = await fetch(url)
     if (!response.ok) {
-      throw new Error(`Failed to read file: ${await response.text()}`)
+      throw new Error(`Failed to read document: ${await response.text()}`)
     }
-    if (format === 'blob') {
-      return response.blob()
-    }
-    return response.text()
+    return response.json() as Promise<{ id: string; name: string; content: string }>
   }
 
-  async removeFile(path: string) {
-    const url = `${this.baseUrl}/files/remove?path=${encodeURIComponent(path)}`
+  async listDocuments(): Promise<DocumentInfo[]> {
+    const url = `${this.baseUrl}/docs`
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to list documents: ${await response.text()}`)
+    }
+    const data = (await response.json()) as { documents: DocumentInfo[] }
+    return data.documents
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    const url = `${this.baseUrl}/docs/${encodeURIComponent(id)}`
     const response = await fetch(url, { method: 'DELETE' })
     if (!response.ok) {
-      throw new Error(`Failed to remove file: ${await response.text()}`)
+      throw new Error(`Failed to delete document: ${await response.text()}`)
     }
-  }
-
-  async listFiles(path = '.'): Promise<EntryInfo[]> {
-    const url = `${this.baseUrl}/files/list?path=${encodeURIComponent(path)}`
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new Error(`Failed to list files: ${await response.text()}`)
-    }
-    const data = (await response.json()) as { entries: EntryInfo[] }
-    return data.entries
-  }
-
-  async mkdir(path: string) {
-    const url = `${this.baseUrl}/files/mkdir?path=${encodeURIComponent(path)}`
-    const response = await fetch(url, { method: 'POST' })
-    if (!response.ok) {
-      throw new Error(`Failed to create directory: ${await response.text()}`)
-    }
-  }
-
-  async exists(path: string): Promise<boolean> {
-    const url = `${this.baseUrl}/files/exists?path=${encodeURIComponent(path)}`
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new Error(`Failed to check existence: ${await response.text()}`)
-    }
-    const data = (await response.json()) as { exists: boolean }
-    return data.exists
   }
 
   // Session history via REST API

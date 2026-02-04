@@ -5,7 +5,6 @@
  */
 
 import { ClaudeAgentClient } from './src/index'
-import { FilesystemEventType } from './src/types'
 
 if (!process.env.E2B_API_KEY) {
   console.error('❌ E2B_API_KEY environment variable is required')
@@ -19,72 +18,22 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 async function main() {
   const client = new ClaudeAgentClient({
+    connectionUrl: 'http://localhost:4000',
     debug: true,
   })
-
-  // Helper function to print file contents
-  const printFileContents = async (files: string[], label: string) => {
-    if (files.length > 0) {
-      console.log(`\n${label}`)
-      for (const file of files) {
-        try {
-          const content = await client.readFile(file, 'text')
-          console.log(`\n  ${file}:`)
-          console.log('  ' + '─'.repeat(50))
-          console.log(
-            content
-              .toString()
-              .split('\n')
-              .map(line => `  ${line}`)
-              .join('\n'),
-          )
-          console.log('  ' + '─'.repeat(50))
-        } catch (error) {
-          console.log(`  - ${file} (could not read: ${error})`)
-        }
-      }
-    }
-  }
 
   try {
     await client.start()
 
-    // Track file changes
-    const createdFiles: string[] = []
-    const modifiedFiles: string[] = []
+    console.log('✅ Client started\n')
 
-    // Set up file watcher
-    console.log('👀 Setting up file watcher...')
-    const watchHandle = await client.watchDir(
-      '.',
-      event => {
-        const eventTypeLabels: Record<string, string> = {
-          [FilesystemEventType.CREATE]: '📄 Created',
-          [FilesystemEventType.WRITE]: '✏️  Modified',
-          [FilesystemEventType.REMOVE]: '🗑️  Deleted',
-          [FilesystemEventType.RENAME]: '📝 Renamed',
-          [FilesystemEventType.CHMOD]: '🔐 Permissions changed',
-        }
-        const label = eventTypeLabels[event.type] || '📁 Changed'
-        console.log(`${label}: ${event.name}`)
-
-        // Track created and modified files
-        if (event.type === FilesystemEventType.CREATE) {
-          createdFiles.push(event.name)
-        } else if (event.type === FilesystemEventType.WRITE) {
-          modifiedFiles.push(event.name)
-        }
-      },
-      { recursive: true },
+    // Create an input document for Claude to work with
+    console.log('🗂️  Creating input document...')
+    const doc = await client.createDocument(
+      'input',
+      'Hello! This is a test document created by the user.',
     )
-    console.log('✅ File watcher active\n')
-
-    console.log('🗂️  Writing input.txt...')
-    await client.writeFile(
-      'input.txt',
-      'Hello! This is a test file created by the user.',
-    )
-    console.log('✅ File written')
+    console.log(`✅ Document created: ${doc.id}`)
 
     const commands = [
       {
@@ -96,7 +45,7 @@ async function main() {
           message: {
             role: 'user',
             content:
-              'Please read "input.txt", reverse its content, and save it to a new file named "output.txt".',
+              `Please read document "${doc.id}", reverse its content, and save it to a new document named "output".`,
           },
         },
       },
@@ -106,15 +55,29 @@ async function main() {
     const stopAndExit = async () => {
       console.log('\n✅ Received result message, stopping...')
 
-      // Print created and modified files with contents
-      await printFileContents(createdFiles, '📄 Created files:')
-      await printFileContents(modifiedFiles, '✏️  Modified files:')
+      // List all documents
+      const documents = await client.listDocuments()
+      console.log('\n📄 Documents:')
+      for (const d of documents) {
+        try {
+          const full = await client.readDocument(d.id)
+          console.log(`\n  ${d.name} (${d.id}):`)
+          console.log('  ' + '─'.repeat(50))
+          console.log(
+            full.content
+              .split('\n')
+              .map(line => `  ${line}`)
+              .join('\n'),
+          )
+          console.log('  ' + '─'.repeat(50))
+        } catch (error) {
+          console.log(`  - ${d.name} (could not read: ${error})`)
+        }
+      }
 
-      console.log('\n🛑 Stopping file watcher...')
-      await watchHandle.stop()
       console.log('\n👋 Closing connection...')
       await client.stop()
-      console.log('✅ Sandbox terminated')
+      console.log('✅ Done')
       process.exit(0)
     }
 
@@ -150,9 +113,9 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 2000))
     }
 
-    // Keep watching for changes
+    // Keep watching
     console.log(
-      '\n👀 Watching for file changes... (will stop when result is received)',
+      '\n👀 Waiting for result... (will stop when result is received)',
     )
   } catch (error) {
     console.error('❌ Error:', error)
