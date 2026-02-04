@@ -45,6 +45,16 @@ let activeStream: ReturnType<typeof query> | null = null
 // Stored query configuration
 let queryConfig: QueryConfig = {}
 
+// Restart the SDK stream with current config
+function restartStream() {
+  if (activeStream) {
+    activeStream.interrupt()
+    activeStream = null
+  }
+  messageQueue.length = 0
+  processMessages()
+}
+
 // Create an async generator that yields messages from the queue
 async function* generateMessages() {
   while (true) {
@@ -128,6 +138,10 @@ const server = Bun.serve({
         .json()
         .then(config => {
           queryConfig = config as QueryConfig
+          // Restart the stream if config changed and we have an active connection
+          if (activeStream && activeConnection) {
+            restartStream()
+          }
           return Response.json({ success: true, config: queryConfig })
         })
         .catch(() => {

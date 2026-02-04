@@ -36,4 +36,5 @@ export type QueryConfig = {
   model?: string
   mcpServers?: Record<string, McpRemoteServerConfig>
   anthropicApiKey?: string
+  resume?: string
 }
