@@ -1,4 +1,12 @@
 import * as Y from 'yjs'
+import { getSchema } from '@tiptap/core'
+import StarterKit from '@tiptap/starter-kit'
+import { Markdown, MarkdownManager } from '@tiptap/markdown'
+import { renderToMarkdown } from '@tiptap/static-renderer/pm/markdown'
+import {
+  prosemirrorJSONToYXmlFragment,
+  yXmlFragmentToProsemirrorJSON,
+} from 'y-prosemirror'
 
 import db from './db'
 
@@ -7,6 +15,45 @@ export type DocumentInfo = {
   name: string
   createdAt: string
   updatedAt: string
+}
+
+// Shared Tiptap extensions and schema for markdown <-> ProseMirror conversion
+const extensions = [StarterKit, Markdown]
+const schema = getSchema(extensions)
+const markdownManager = new MarkdownManager({ extensions })
+
+// Minimum valid ProseMirror doc (empty paragraph)
+const EMPTY_DOC_JSON = { type: 'doc', content: [{ type: 'paragraph' }] }
+
+/**
+ * Parse markdown string to ProseMirror JSON.
+ */
+function markdownToJSON(markdown: string): Record<string, unknown> {
+  return markdownManager.parse(markdown)
+}
+
+/**
+ * Serialize ProseMirror JSON to markdown string.
+ */
+function jsonToMarkdown(json: Record<string, unknown>): string {
+  return renderToMarkdown({ extensions, content: json }).trim()
+}
+
+/**
+ * Populate a Y.XmlFragment from a markdown string.
+ * The fragment should be empty before calling this.
+ */
+function populateFragment(fragment: Y.XmlFragment, markdown: string): void {
+  const json = markdownToJSON(markdown)
+  prosemirrorJSONToYXmlFragment(schema, json, fragment)
+}
+
+/**
+ * Read a Y.XmlFragment as a markdown string.
+ */
+function fragmentToMarkdown(fragment: Y.XmlFragment): string {
+  const json = yXmlFragmentToProsemirrorJSON(fragment)
+  return jsonToMarkdown(json)
 }
 
 // In-memory cache of active documents
@@ -36,6 +83,7 @@ export function getDoc(id: string): Y.Doc | null {
 
 /**
  * Create a new document with optional initial markdown content.
+ * Stores content as a Y.XmlFragment('default') containing ProseMirror nodes.
  */
 export function createDoc(
   id: string,
@@ -48,10 +96,12 @@ export function createDoc(
   if (existing) throw new Error(`Document ${id} already exists`)
 
   const doc = new Y.Doc()
+  const fragment = doc.getXmlFragment('default')
 
   if (content) {
-    const ytext = doc.getText('default')
-    ytext.insert(0, content)
+    populateFragment(fragment, content)
+  } else {
+    prosemirrorJSONToYXmlFragment(schema, EMPTY_DOC_JSON, fragment)
   }
 
   const state = Y.encodeStateAsUpdate(doc)
@@ -89,15 +139,19 @@ export function listDocs(): DocumentInfo[] {
 
 /**
  * Read document content as markdown string.
+ * Converts the Y.XmlFragment to ProseMirror JSON, then to markdown.
  */
 export function readDocAsText(id: string): string | null {
   const doc = getDoc(id)
   if (!doc) return null
-  return doc.getText('default').toString()
+  const fragment = doc.getXmlFragment('default')
+  return fragmentToMarkdown(fragment)
 }
 
 /**
  * Apply a find-and-replace edit to a document.
+ * Serializes XmlFragment to markdown, applies the text edit, then replaces
+ * the fragment content atomically.
  * Returns true if the edit was applied, false if old_text was not found.
  */
 export function editDoc(
@@ -108,28 +162,46 @@ export function editDoc(
   const doc = getDoc(id)
   if (!doc) throw new Error(`Document ${id} not found`)
 
-  const ytext = doc.getText('default')
-  const content = ytext.toString()
+  const fragment = doc.getXmlFragment('default')
+  const content = fragmentToMarkdown(fragment)
   const index = content.indexOf(oldText)
   if (index === -1) return false
 
+  const edited = content.slice(0, index) + newText + content.slice(index + oldText.length)
+
   doc.transact(() => {
-    ytext.delete(index, oldText.length)
-    ytext.insert(index, newText)
+    // Clear existing content
+    while (fragment.length > 0) {
+      fragment.delete(0, 1)
+    }
+    // Populate with edited markdown
+    populateFragment(fragment, edited)
   })
 
   return true
 }
 
 /**
- * Append text to the end of a document.
+ * Append markdown content to the end of a document.
+ * Parses the appended markdown to ProseMirror nodes and appends them
+ * to the existing XmlFragment.
  */
 export function appendDoc(id: string, content: string): void {
   const doc = getDoc(id)
   if (!doc) throw new Error(`Document ${id} not found`)
 
-  const ytext = doc.getText('default')
-  ytext.insert(ytext.length, content)
+  const fragment = doc.getXmlFragment('default')
+
+  // Get current content as markdown, append, and replace
+  const current = fragmentToMarkdown(fragment)
+  const combined = current + content
+
+  doc.transact(() => {
+    while (fragment.length > 0) {
+      fragment.delete(0, 1)
+    }
+    populateFragment(fragment, combined)
+  })
 }
 
 /**

@@ -3,8 +3,19 @@ import * as Y from 'yjs'
 import * as syncProtocol from 'y-protocols/sync'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
+import { getSchema } from '@tiptap/core'
+import StarterKit from '@tiptap/starter-kit'
+import { Markdown } from '@tiptap/markdown'
+import { renderToMarkdown } from '@tiptap/static-renderer/pm/markdown'
+import {
+  prosemirrorJSONToYXmlFragment,
+  yXmlFragmentToProsemirrorJSON,
+} from 'y-prosemirror'
 
 import * as docManager from './document-manager'
+
+const tiptapExtensions = [StarterKit, Markdown]
+const tiptapSchema = getSchema(tiptapExtensions)
 
 const PORT = 4111 // Use a different port for tests
 const BASE_URL = `http://localhost:${PORT}`
@@ -77,12 +88,22 @@ class TestYjsClient {
   }
 
   getText(): string {
-    return this.doc.getText('default').toString()
+    const fragment = this.doc.getXmlFragment('default')
+    if (fragment.length === 0) return ''
+    const json = yXmlFragmentToProsemirrorJSON(fragment)
+    return renderToMarkdown({ extensions: tiptapExtensions, content: json }).trim()
   }
 
-  insertText(index: number, text: string): void {
+  setContent(markdown: string): void {
+    const { MarkdownManager } = require('@tiptap/markdown')
+    const mgr = new MarkdownManager({ extensions: tiptapExtensions })
+    const json = mgr.parse(markdown)
+    const fragment = this.doc.getXmlFragment('default')
     this.doc.transact(() => {
-      this.doc.getText('default').insert(index, text)
+      while (fragment.length > 0) {
+        fragment.delete(0, 1)
+      }
+      prosemirrorJSONToYXmlFragment(tiptapSchema, json, fragment)
     }, 'local')
   }
 
@@ -281,8 +302,8 @@ test('Yjs client edits propagate to server (readable via REST)', async () => {
   const client = new TestYjsClient('client-edit')
   await client.synced
 
-  // Edit from client
-  client.insertText(5, ' Here')
+  // Edit from client (replace content via XmlFragment)
+  client.setContent('Start Here')
   await waitForSync()
 
   // Read via REST
@@ -310,8 +331,8 @@ test('Two Yjs clients see each others changes', async () => {
   expect(client1.getText()).toBe('Base')
   expect(client2.getText()).toBe('Base')
 
-  // Client 1 edits
-  client1.insertText(4, ' Text')
+  // Client 1 edits (replaces content via XmlFragment)
+  client1.setContent('Base Text')
   await waitForSync(300)
 
   // Both clients should see the change
