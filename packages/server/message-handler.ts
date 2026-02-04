@@ -9,7 +9,7 @@ export type MessageHandlerContext = {
 }
 
 export async function handleMessage(
-  ws: ServerWebSocket,
+  ws: ServerWebSocket<unknown>,
   message: string | Buffer,
   context: MessageHandlerContext,
 ) {

@@ -9,9 +9,21 @@ import {
 import { type ServerWebSocket } from 'bun'
 
 import { SERVER_PORT, WORKSPACE_DIR_NAME } from './const'
-import * as fileHandler from './file-handler'
+import * as docManager from './document-manager'
+import {
+  handleYjsOpen,
+  handleYjsMessage,
+  handleYjsClose,
+  type YjsWSData,
+} from './yjs-sync'
 import { handleMessage } from './message-handler'
 import { type QueryConfig, type WSOutputMessage } from './message-types'
+import { documentToolsServer } from './document-tools'
+
+// WebSocket data type union
+type WSData =
+  | { type: 'sdk' }
+  | YjsWSData
 
 const workspaceDirectory = join(homedir(), WORKSPACE_DIR_NAME)
 const claudeProjectsDir = join(homedir(), '.claude', 'projects')
@@ -34,7 +46,7 @@ async function getSessionsDir(): Promise<string | null> {
 }
 
 // Single WebSocket connection (only one allowed)
-let activeConnection: ServerWebSocket | null = null
+let activeConnection: ServerWebSocket<WSData> | null = null
 
 // Message queue
 const messageQueue: SDKUserMessage[] = []
@@ -87,6 +99,10 @@ async function processMessages() {
         }
       },
       ...queryConfig,
+      mcpServers: {
+        ...queryConfig.mcpServers,
+        documents: documentToolsServer,
+      } as Options['mcpServers'],
       env: {
         PATH: process.env.PATH,
         ...(queryConfig.anthropicApiKey && {
@@ -127,7 +143,7 @@ async function processMessages() {
 }
 
 // Create WebSocket server
-const server = Bun.serve({
+const server = Bun.serve<WSData>({
   port: SERVER_PORT,
   async fetch(req, server) {
     const url = new URL(req.url)
@@ -162,99 +178,56 @@ const server = Bun.serve({
       })
     }
 
-    // File operations endpoints
-    // POST /files/write - Write file
-    if (url.pathname === '/files/write' && req.method === 'POST') {
-      const path = url.searchParams.get('path')
-      if (!path) {
-        return Response.json({ error: 'Path is required' }, { status: 400 })
-      }
+    // Document REST endpoints
+
+    // POST /docs - Create a new document
+    if (url.pathname === '/docs' && req.method === 'POST') {
       try {
-        const contentType = req.headers.get('content-type') || ''
-        let content: string | Blob
-        if (contentType.includes('application/json')) {
-          const body = (await req.json()) as { content: string }
-          content = body.content
-        } else {
-          content = await req.blob()
+        const body = (await req.json()) as { id?: string; name: string; content?: string }
+        if (!body.name) {
+          return Response.json({ error: 'name is required' }, { status: 400 })
         }
-        await fileHandler.writeFile(path, content)
-        return Response.json({ success: true })
+        const id = body.id || crypto.randomUUID()
+        docManager.createDoc(id, body.name, body.content)
+        return Response.json({ id, name: body.name })
       } catch (error) {
-        return Response.json({ error: String(error) }, { status: 500 })
+        return Response.json({ error: String(error) }, { status: 400 })
       }
     }
 
-    // GET /files/read - Read file
-    if (url.pathname === '/files/read' && req.method === 'GET') {
-      const path = url.searchParams.get('path')
-      const format = (url.searchParams.get('format') || 'text') as 'text' | 'blob'
-      if (!path) {
-        return Response.json({ error: 'Path is required' }, { status: 400 })
-      }
-      try {
-        const content = await fileHandler.readFile(path, format)
-        if (format === 'blob') {
-          return new Response(content as Blob)
+    // GET /docs - List all documents
+    if (url.pathname === '/docs' && req.method === 'GET') {
+      return Response.json({ documents: docManager.listDocs() })
+    }
+
+    // GET /docs/:id - Read document as markdown (or WebSocket upgrade for Yjs sync)
+    if (url.pathname.match(/^\/docs\/[^/]+$/)) {
+      const id = decodeURIComponent(url.pathname.slice('/docs/'.length))
+
+      // WebSocket upgrade for Yjs sync
+      if (req.headers.get('upgrade') === 'websocket') {
+        if (!docManager.getDoc(id)) {
+          return Response.json({ error: 'Document not found' }, { status: 404 })
         }
-        return new Response(content as string, {
-          headers: { 'Content-Type': 'text/plain' },
-        })
-      } catch (error) {
-        return Response.json({ error: String(error) }, { status: 404 })
+        const data: YjsWSData = { type: 'yjs', docId: id }
+        if (server.upgrade(req, { data })) return
+        return new Response('WebSocket upgrade failed', { status: 500 })
       }
-    }
 
-    // DELETE /files/remove - Remove file/directory
-    if (url.pathname === '/files/remove' && req.method === 'DELETE') {
-      const path = url.searchParams.get('path')
-      if (!path) {
-        return Response.json({ error: 'Path is required' }, { status: 400 })
+      // GET - return markdown content
+      if (req.method === 'GET') {
+        const content = docManager.readDocAsText(id)
+        if (content === null) {
+          return Response.json({ error: 'Document not found' }, { status: 404 })
+        }
+        const info = docManager.getDocInfo(id)
+        return Response.json({ id, name: info?.name, content })
       }
-      try {
-        await fileHandler.removeFile(path)
+
+      // DELETE - delete a document
+      if (req.method === 'DELETE') {
+        docManager.deleteDoc(id)
         return Response.json({ success: true })
-      } catch (error) {
-        return Response.json({ error: String(error) }, { status: 500 })
-      }
-    }
-
-    // GET /files/list - List directory contents
-    if (url.pathname === '/files/list' && req.method === 'GET') {
-      const path = url.searchParams.get('path') || '.'
-      try {
-        const entries = await fileHandler.listFiles(path)
-        return Response.json({ entries })
-      } catch (error) {
-        return Response.json({ error: String(error) }, { status: 500 })
-      }
-    }
-
-    // POST /files/mkdir - Create directory
-    if (url.pathname === '/files/mkdir' && req.method === 'POST') {
-      const path = url.searchParams.get('path')
-      if (!path) {
-        return Response.json({ error: 'Path is required' }, { status: 400 })
-      }
-      try {
-        await fileHandler.makeDir(path)
-        return Response.json({ success: true })
-      } catch (error) {
-        return Response.json({ error: String(error) }, { status: 500 })
-      }
-    }
-
-    // GET /files/exists - Check if file/directory exists
-    if (url.pathname === '/files/exists' && req.method === 'GET') {
-      const path = url.searchParams.get('path')
-      if (!path) {
-        return Response.json({ error: 'Path is required' }, { status: 400 })
-      }
-      try {
-        const exists = await fileHandler.exists(path)
-        return Response.json({ exists })
-      } catch (error) {
-        return Response.json({ error: String(error) }, { status: 500 })
       }
     }
 
@@ -303,16 +276,22 @@ const server = Bun.serve({
       }
     }
 
-    // WebSocket endpoint
+    // SDK WebSocket endpoint
     if (url.pathname === '/ws') {
-      if (server.upgrade(req)) return
+      if (server.upgrade(req, { data: { type: 'sdk' } })) return
     }
 
     return new Response('Not Found', { status: 404 })
   },
 
   websocket: {
-    open(ws) {
+    open(ws: ServerWebSocket<WSData>) {
+      if (ws.data.type === 'yjs') {
+        handleYjsOpen(ws as ServerWebSocket<YjsWSData>)
+        return
+      }
+
+      // SDK connection
       if (activeConnection) {
         const output: WSOutputMessage = {
           type: 'error',
@@ -334,14 +313,24 @@ const server = Bun.serve({
       ws.send(JSON.stringify(output))
     },
 
-    async message(ws, message) {
+    async message(ws: ServerWebSocket<WSData>, message) {
+      if (ws.data.type === 'yjs') {
+        handleYjsMessage(ws as ServerWebSocket<YjsWSData>, message as unknown as ArrayBuffer)
+        return
+      }
+
       await handleMessage(ws, message, {
         messageQueue,
         getActiveStream: () => activeStream,
       })
     },
 
-    close(ws) {
+    close(ws: ServerWebSocket<WSData>) {
+      if (ws.data.type === 'yjs') {
+        handleYjsClose(ws as ServerWebSocket<YjsWSData>)
+        return
+      }
+
       if (activeConnection === ws) {
         activeConnection = null
       }

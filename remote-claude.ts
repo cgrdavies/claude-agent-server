@@ -73,7 +73,7 @@ function prompt() {
 
     if (trimmed === '/quit' || trimmed === '/exit') {
       console.log('Goodbye!')
-      await client.stop()
+      await client?.stop()
       rl.close()
       process.exit(0)
     }
