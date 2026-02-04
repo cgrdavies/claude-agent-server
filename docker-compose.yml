@@ -8,6 +8,7 @@ services:
       - 4000
     volumes:
       - workspace-data:/home/bun/agent-workspace
+      - claude-data:/home/bun/.claude
     environment:
       - NODE_ENV=production
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
@@ -21,6 +22,7 @@ services:
 
 volumes:
   workspace-data:
+  claude-data:
 
 networks:
   dokploy-network:
