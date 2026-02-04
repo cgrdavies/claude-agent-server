@@ -260,15 +260,15 @@ export function getDocInfo(id: string): DocumentInfo | null {
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] TypeScript compiles cleanly: `bunx tsc --noEmit`
-- [ ] Unit tests for document CRUD operations: `bun test packages/server/document-manager.test.ts`
+- [x] TypeScript compiles cleanly: `bunx tsc --noEmit`
+- [x] Unit tests for document CRUD operations: `bun test packages/server/document-manager.test.ts`
   - Create a document with content, verify `readDocAsText` returns it
   - `editDoc` find-and-replace works correctly
   - `appendDoc` adds to end
   - `deleteDoc` removes from both memory and SQLite
   - `listDocs` returns all documents
   - Document survives cache eviction (remove from `docs` Map, reload from SQLite)
-- [ ] Database file created at expected path
+- [x] Database file created at expected path
 
 #### Manual Verification:
 - [ ] Confirm SQLite WAL mode is active and DB is not corrupted after rapid writes
@@ -572,16 +572,16 @@ Remove the old `/files/*` endpoints and `file-handler.ts` import. The old file h
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `bun add yjs y-protocols lib0` installs successfully
-- [ ] TypeScript compiles cleanly: `bunx tsc --noEmit`
-- [ ] Server starts without errors: `bun run packages/server/index.ts`
-- [ ] Health endpoint responds: `curl localhost:4000/health`
-- [ ] Document CRUD via REST:
+- [x] `bun add yjs y-protocols lib0` installs successfully
+- [x] TypeScript compiles cleanly: `bunx tsc --noEmit`
+- [x] Server starts without errors: `bun run packages/server/index.ts`
+- [x] Health endpoint responds: `curl localhost:4000/health`
+- [x] Document CRUD via REST:
   - `curl -X POST localhost:4000/docs -H 'Content-Type: application/json' -d '{"name":"test","content":"# Hello"}'` returns `{id, name}`
   - `curl localhost:4000/docs` returns document list
   - `curl localhost:4000/docs/<id>` returns `{id, name, content: "# Hello"}`
   - `curl -X DELETE localhost:4000/docs/<id>` returns `{success: true}`
-- [ ] Integration test for Yjs sync: `bun test packages/server/yjs-sync.test.ts`
+- [x] Integration test for Yjs sync: `bun test packages/server/yjs-sync.test.ts`
   - Connect a y-websocket `WebsocketProvider` to `ws://localhost:4000/docs/<id>`
   - Verify initial document content syncs to client
   - Verify client edits propagate to server (readable via REST)
