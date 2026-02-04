@@ -58,12 +58,15 @@ async function processMessages() {
         }
       },
       ...queryConfig,
-      ...(queryConfig.anthropicApiKey && {
-        env: {
-          PATH: process.env.PATH,
+      env: {
+        PATH: process.env.PATH,
+        ...(queryConfig.anthropicApiKey && {
           ANTHROPIC_API_KEY: queryConfig.anthropicApiKey,
-        },
-      }),
+        }),
+        ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
+          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+        }),
+      },
     }
 
     console.info('Starting query with options', options)
