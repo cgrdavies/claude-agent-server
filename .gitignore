@@ -47,3 +47,5 @@ mocks/
 **/.branches/
 **/.temp/
 .env.test
+# Worktrees
+cc-worktrees/
