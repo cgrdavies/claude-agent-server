@@ -20,8 +20,9 @@ export type YjsWSData = {
   type: 'yjs'
   docId: string
   token?: string
-  workspaceId?: string
+  projectId?: string
   userId?: string
+  _workspaceId?: string // Used only for auth verification
   _updateHandler?: (update: Uint8Array, origin: unknown) => void
 }
 
@@ -51,14 +52,14 @@ function broadcast(docId: string, message: Uint8Array, exclude?: ServerWebSocket
  * Auth has already been verified by the ws/yjs.ts handler.
  */
 export async function handleYjsOpen(ws: ServerWebSocket<YjsWSData>): Promise<void> {
-  const { docId, userId, workspaceId } = ws.data
+  const { docId, userId, projectId } = ws.data
 
-  if (!userId || !workspaceId) {
+  if (!userId || !projectId) {
     ws.close(4001, 'Missing authentication context')
     return
   }
 
-  const doc = await docManager.getDoc(userId, workspaceId, docId)
+  const doc = await docManager.getDoc(userId, projectId, docId)
   if (!doc) {
     ws.close(4004, `Document ${docId} not found`)
     return
@@ -116,9 +117,10 @@ export function handleYjsMessage(
   ws: ServerWebSocket<YjsWSData>,
   message: ArrayBuffer | Buffer,
 ): void {
-  const { docId } = ws.data
+  const { docId, projectId } = ws.data
+
   // Use cache-only access since doc was loaded in open handler
-  const doc = docManager.getDocFromCache(docId)
+  const doc = docManager.getDocFromCache(projectId!, docId)
   if (!doc) return
 
   const buf = new Uint8Array(message instanceof ArrayBuffer ? message : message.buffer)
@@ -153,8 +155,8 @@ export function handleYjsMessage(
  * Called when a Yjs sync WebSocket closes.
  */
 export function handleYjsClose(ws: ServerWebSocket<YjsWSData>): void {
-  const { docId } = ws.data
-  const doc = docManager.getDocFromCache(docId)
+  const { docId, projectId } = ws.data
+  const doc = projectId ? docManager.getDocFromCache(projectId, docId) : null
 
   // Remove update listener
   if (doc && ws.data._updateHandler) {

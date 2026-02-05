@@ -5,6 +5,7 @@ import { authMiddleware } from './middleware/auth'
 import { sessionsRouter } from './routes/sessions'
 import { messagesRouter } from './routes/messages'
 import { documentsRouter } from './routes/documents'
+import { projectsRouter } from './routes/projects'
 import { handleYjsUpgrade, yjsWebsocket } from './ws/yjs'
 
 const app = new Hono()
@@ -24,6 +25,7 @@ app.get('/health', (c) =>
 // Protected API routes
 const api = new Hono()
 api.use('*', authMiddleware)
+api.route('/projects', projectsRouter)
 api.route('/sessions', sessionsRouter)
 api.route('/documents', documentsRouter)
 
@@ -33,19 +35,21 @@ api.route('/sessions', messagesRouter)
 
 app.route('/api', api)
 
-// Start server
-const server = Bun.serve({
-  port: Number(Bun.env.PORT ?? 4000),
-  fetch(req, server) {
-    // Handle WebSocket upgrades for Yjs
-    const upgraded = handleYjsUpgrade(req, server)
-    if (upgraded) return undefined
+// Only start server when run directly (not when imported for testing)
+if (import.meta.main) {
+  const server = Bun.serve({
+    port: Number(Bun.env.PORT ?? 4000),
+    fetch(req, server) {
+      // Handle WebSocket upgrades for Yjs
+      const upgraded = handleYjsUpgrade(req, server)
+      if (upgraded) return undefined
 
-    return app.fetch(req)
-  },
-  websocket: yjsWebsocket,
-})
+      return app.fetch(req)
+    },
+    websocket: yjsWebsocket,
+  })
 
-console.log(`Server running on http://localhost:${server.port}`)
+  console.log(`Server running on http://localhost:${server.port}`)
+}
 
 export { app }

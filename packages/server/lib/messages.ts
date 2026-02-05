@@ -58,7 +58,7 @@ export async function saveAssistantMessage(
         type: 'tool-call',
         toolCallId: tc.toolCallId,
         toolName: tc.toolName,
-        args: tc.input,
+        input: tc.input,
       })
     }
   }
@@ -96,7 +96,7 @@ export async function saveToolResultMessage(
     type: 'tool-result',
     toolCallId,
     toolName,
-    result,
+    output: { type: 'json', value: result },
   }])
 
   await withRLS(userId, (sql) =>
@@ -107,12 +107,27 @@ export async function saveToolResultMessage(
 
 /**
  * Convert a DB row back to a ModelMessage for AI SDK replay.
- * Since we store the content in ModelMessage format, reconstruction
- * is just JSON.parse + wrapping with the role.
+ * Handles migration from legacy format (result field) to AI SDK v6 format (output field).
  */
 function rowToModelMessage(row: Record<string, unknown>): ModelMessage {
   const role = row.role as string
   const content = JSON.parse(row.content as string)
+
+  // Migrate legacy formats to AI SDK v6 ModelMessage shape
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      // tool messages: { result: X } -> { output: { type: 'json', value: X } }
+      if (part.type === 'tool-result' && !part.output) {
+        part.output = { type: 'json', value: part.result ?? null }
+        delete part.result
+      }
+      // assistant messages: { args: X } -> { input: X }
+      if (part.type === 'tool-call' && 'args' in part && !('input' in part)) {
+        part.input = part.args
+        delete part.args
+      }
+    }
+  }
 
   return { role, content } as ModelMessage
 }

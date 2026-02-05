@@ -3,6 +3,12 @@
  * Each event is sent as: `event: <type>\ndata: <JSON>\n\n`
  */
 
+/** Stream connection established, processing starting */
+export type StartedEvent = {
+  type: 'started'
+  sessionId: string
+}
+
 /** Assistant is producing text */
 export type TextDeltaEvent = {
   type: 'text-delta'
@@ -54,6 +60,7 @@ export type ErrorEvent = {
 }
 
 export type StreamEvent =
+  | StartedEvent
   | TextDeltaEvent
   | ToolCallCompleteEvent
   | ToolResultEvent

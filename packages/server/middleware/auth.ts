@@ -4,6 +4,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 type AuthVariables = {
   userId: string
   workspaceId: string
+  isSuperuser: boolean
 }
 
 let _supabase: SupabaseClient | null = null
@@ -82,6 +83,7 @@ export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
 
     c.set('userId', user.id)
     c.set('workspaceId', workspaceId)
+    c.set('isSuperuser', claims.is_superuser === true)
 
     await next()
   },

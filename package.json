@@ -6,7 +6,12 @@
   ],
   "scripts": {
     "start:server": "bun run --filter @claude-agent/server start",
+    "test": "bun test --env-file=.env.test",
+    "test:server": "bun test --env-file=.env.test packages/server/tests/",
     "test:client": "bun run --elide-lines=0 --env-file=.env --filter @dzhng/claude-agent test",
+    "test:db:start": "cd supabase-test && supabase start",
+    "test:db:stop": "cd supabase-test && supabase stop",
+    "test:db:reset": "cd supabase-test && supabase db reset",
     "docker:build": "docker build -t claude-agent-server .",
     "docker:run": "docker run -p 4000:4000 -v ~/.claude:/home/user/.claude:ro claude-agent-server",
     "docker:compose": "docker compose up"
@@ -16,5 +21,8 @@
     "@types/bun": "latest",
     "prettier": "^3.6.2",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@tiptap/extension-table": "^3.18.0"
   }
 }

@@ -38,6 +38,11 @@ messagesRouter.post('/:sessionId/messages', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
+  const projectId = session.project_id as string | undefined
+  if (!projectId) {
+    return c.json({ error: 'Session has no project_id' }, 400)
+  }
+
   // Use session's model/provider unless overridden in this message
   const provider = body.provider ?? (session.provider as 'anthropic' | 'openai' | 'openrouter')
   const modelId = body.model ?? (session.model as string)
@@ -49,10 +54,17 @@ messagesRouter.post('/:sessionId/messages', async (c) => {
   // Load full conversation history for this session
   const previousMessages = await loadSessionMessages(userId, sessionId)
 
-  // Create workspace-scoped tools (needs userId for RLS on doc operations)
-  const tools = createDocumentTools(workspaceId, userId)
+  // Create project-scoped tools (needs userId for RLS on doc operations)
+  const tools = createDocumentTools(projectId, userId)
 
   return streamSSE(c, async (stream) => {
+    // Send an initial event immediately to establish the SSE connection
+    // This ensures errors can be sent back to the client
+    await stream.writeSSE({
+      event: 'started',
+      data: JSON.stringify({ type: 'started', sessionId }),
+    })
+
     let totalTokensIn = 0
     let totalTokensOut = 0
     let stepIndex = 0
@@ -60,6 +72,8 @@ messagesRouter.post('/:sessionId/messages', async (c) => {
 
     try {
       const result = streamText({
+        // Reduce retries to fail faster on rate limits
+        maxRetries: 2,
         model,
         messages: previousMessages,
         tools,
@@ -163,11 +177,31 @@ messagesRouter.post('/:sessionId/messages', async (c) => {
         } satisfies StreamEvent),
       })
     } catch (err) {
+      // Extract useful error details, especially for rate limits
+      let errorMessage = err instanceof Error ? err.message : String(err)
+      let errorCode: string | undefined
+
+      // Check for rate limit errors from Anthropic/AI SDK
+      const errAny = err as Record<string, unknown>
+      if (errAny.statusCode === 429 || errorMessage.includes('rate limit')) {
+        errorCode = 'rate_limit'
+        // Try to extract retry-after if available
+        const retryAfter = (errAny.responseHeaders as Record<string, string>)?.['retry-after']
+        if (retryAfter) {
+          errorMessage = `Rate limit exceeded. Please wait ${retryAfter} seconds and try again.`
+        } else {
+          errorMessage = 'Rate limit exceeded. Please wait a moment and try again.'
+        }
+      }
+
+      console.error(`[messages] Error in stream:`, errorCode ?? 'unknown', errorMessage)
+
       await stream.writeSSE({
         event: 'error',
         data: JSON.stringify({
           type: 'error',
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMessage,
+          code: errorCode,
         } satisfies StreamEvent),
       })
     }

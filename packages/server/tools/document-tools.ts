@@ -2,6 +2,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 
 import * as docManager from '../document-manager'
+import * as folderManager from '../folder-manager'
 
 function unquote(text: string): string {
   const trimmed = text.trim()
@@ -32,25 +33,27 @@ function oldTextCandidates(oldText: string): string[] {
 }
 
 /**
- * Creates workspace-scoped document tools for the AI SDK agent loop.
- * All operations are scoped to the user's workspace via RLS.
+ * Creates project-scoped document tools for the AI SDK agent loop.
+ * All operations are scoped to the user's project via RLS.
  */
-export function createDocumentTools(workspaceId: string, userId: string) {
+export function createDocumentTools(projectId: string, userId: string) {
   return {
     doc_create: tool({
-      description: 'Create a new markdown document in the workspace',
+      description: 'Create a new markdown document. Optionally specify a folder.',
       inputSchema: z.object({
         name: z.string().describe('Document name/title'),
         content: z.string().optional().describe('Initial markdown content'),
+        folder_id: z.string().optional().describe('Folder ID to create in. Omit for project root.'),
       }),
-      execute: async ({ name, content }) => {
+      execute: async ({ name, content, folder_id }) => {
         const info = await docManager.createDoc(
           userId,
-          workspaceId,
+          projectId,
           name,
           content,
+          folder_id,
         )
-        return { id: info.id, name: info.name }
+        return { id: info.id, name: info.name, folder_id: info.folder_id }
       },
     }),
 
@@ -61,7 +64,7 @@ export function createDocumentTools(workspaceId: string, userId: string) {
         id: z.string().describe('Document ID'),
       }),
       execute: async ({ id }) => {
-        const result = await docManager.readDocAsText(userId, workspaceId, id)
+        const result = await docManager.readDocAsText(userId, projectId, id)
         if (!result) return { error: 'Document not found' }
         return { id, name: result.name, content: result.content }
       },
@@ -84,7 +87,7 @@ export function createDocumentTools(workspaceId: string, userId: string) {
           for (const candidate of candidates) {
             success = await docManager.editDoc(
               userId,
-              workspaceId,
+              projectId,
               id,
               candidate,
               newText,
@@ -109,7 +112,7 @@ export function createDocumentTools(workspaceId: string, userId: string) {
       }),
       execute: async ({ id, content }) => {
         try {
-          await docManager.appendDoc(userId, workspaceId, id, content)
+          await docManager.appendDoc(userId, projectId, id, content)
           return { success: true }
         } catch (err) {
           return { success: false, error: String(err) }
@@ -118,11 +121,25 @@ export function createDocumentTools(workspaceId: string, userId: string) {
     }),
 
     doc_list: tool({
-      description: 'List all documents in the workspace.',
-      inputSchema: z.object({}),
-      execute: async () => {
-        const documents = await docManager.listDocs(userId, workspaceId)
-        return { documents }
+      description: 'List documents. Optionally filter by folder.',
+      inputSchema: z.object({
+        folder_id: z.string().optional().describe('Folder ID to list. Omit for all documents.'),
+      }),
+      execute: async ({ folder_id }) => {
+        const docs = await docManager.listDocs(userId, projectId, folder_id)
+        return { documents: docs.map(d => ({ id: d.id, name: d.name, folder_id: d.folder_id })) }
+      },
+    }),
+
+    doc_move: tool({
+      description: 'Move a document to a different folder.',
+      inputSchema: z.object({
+        id: z.string().describe('Document ID'),
+        folder_id: z.string().nullable().describe('Target folder ID, or null for project root'),
+      }),
+      execute: async ({ id, folder_id }) => {
+        await docManager.moveDoc(userId, projectId, id, folder_id)
+        return { success: true }
       },
     }),
 
@@ -132,8 +149,31 @@ export function createDocumentTools(workspaceId: string, userId: string) {
         id: z.string().describe('Document ID'),
       }),
       execute: async ({ id }) => {
-        await docManager.deleteDoc(userId, workspaceId, id)
+        await docManager.deleteDoc(userId, projectId, id)
         return { success: true }
+      },
+    }),
+
+    folder_create: tool({
+      description: 'Create a new folder.',
+      inputSchema: z.object({
+        name: z.string().describe('Folder name'),
+        parent_id: z.string().optional().describe('Parent folder ID. Omit for project root.'),
+      }),
+      execute: async ({ name, parent_id }) => {
+        const folder = await folderManager.createFolder(userId, projectId, name, parent_id)
+        return { id: folder.id, name: folder.name, parent_id: folder.parent_id }
+      },
+    }),
+
+    folder_list: tool({
+      description: 'List folders.',
+      inputSchema: z.object({
+        parent_id: z.string().optional().describe('Parent folder ID. Omit for all folders.'),
+      }),
+      execute: async ({ parent_id }) => {
+        const folders = await folderManager.listFolders(userId, projectId, parent_id)
+        return { folders: folders.map(f => ({ id: f.id, name: f.name, parent_id: f.parent_id })) }
       },
     }),
   }

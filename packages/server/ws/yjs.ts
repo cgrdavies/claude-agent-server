@@ -22,6 +22,14 @@ function getSupabase(): SupabaseClient {
 }
 
 /**
+ * Reset the Supabase client singleton.
+ * Used by tests to ensure correct env vars are picked up.
+ */
+export function resetSupabaseClient(): void {
+  _supabase = null
+}
+
+/**
  * Decode JWT payload without verification (verification is done by getUser).
  */
 function decodeJwtPayload(jwt: string): Record<string, unknown> {
@@ -36,7 +44,7 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> {
 
 /**
  * Handle WebSocket upgrade requests for Yjs document sync.
- * Authenticates via ?token=<jwt>&workspace_id=<uuid> query params.
+ * Authenticates via ?token=<jwt>&workspace_id=<uuid>&project_id=<uuid> query params.
  * Returns true if the request was upgraded, undefined otherwise.
  */
 export function handleYjsUpgrade(req: Request, server: Server<WSData>): boolean {
@@ -47,17 +55,19 @@ export function handleYjsUpgrade(req: Request, server: Server<WSData>): boolean 
   const docId = match[1]!
   const token = url.searchParams.get('token')
   const workspaceId = url.searchParams.get('workspace_id')
+  const projectId = url.searchParams.get('project_id')
 
-  if (!token || !workspaceId) {
+  if (!token || !workspaceId || !projectId) {
     return false
   }
 
-  // Store token and workspaceId for async auth verification in open handler
+  // Store token, workspaceId (for auth), and projectId (for document loading)
   const data: YjsWSData = {
     type: 'yjs',
     docId,
     token,
-    workspaceId,
+    projectId,
+    _workspaceId: workspaceId, // Used only for auth verification
   }
 
   return server.upgrade(req, { data })
@@ -69,16 +79,21 @@ export function handleYjsUpgrade(req: Request, server: Server<WSData>): boolean 
  */
 async function verifyWebSocketAuth(token: string, workspaceId: string): Promise<string | null> {
   const supabase = getSupabase()
+
   const { data: { user }, error } = await supabase.auth.getUser(token)
 
-  if (error || !user) return null
+  if (error || !user) {
+    return null
+  }
 
   // Check workspace membership from JWT claims
   const claims = decodeJwtPayload(token)
   const memberships = (claims.workspaces ?? []) as Array<{ workspace_id: string }>
   const isMember = memberships.some((m) => m.workspace_id === workspaceId)
 
-  if (!isMember) return null
+  if (!isMember) {
+    return null
+  }
 
   return user.id
 }
@@ -88,15 +103,15 @@ async function verifyWebSocketAuth(token: string, workspaceId: string): Promise<
  */
 export const yjsWebsocket = {
   async open(ws: ServerWebSocket<WSData>) {
-    const { token, workspaceId } = ws.data
+    const { token, projectId, _workspaceId } = ws.data
 
-    if (!token || !workspaceId) {
+    if (!token || !projectId || !_workspaceId) {
       ws.close(4001, 'Missing authentication')
       return
     }
 
-    // Verify auth
-    const userId = await verifyWebSocketAuth(token, workspaceId)
+    // Verify auth using workspace membership
+    const userId = await verifyWebSocketAuth(token, _workspaceId)
     if (!userId) {
       ws.close(4003, 'Unauthorized')
       return

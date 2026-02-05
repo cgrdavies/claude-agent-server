@@ -20,14 +20,19 @@ sessionsRouter.post('/', async (c) => {
   const workspaceId = c.get('workspaceId')
   const body = await c.req.json<CreateSessionRequest>()
 
+  const projectId = body.project_id
+  if (!projectId) {
+    return c.json({ error: 'project_id is required' }, 400)
+  }
+
   const title = body.title ?? 'New Session'
   const model = body.model ?? DEFAULT_MODEL
   const provider = body.provider ?? DEFAULT_PROVIDER
   const systemPrompt = body.system_prompt ?? null
 
   const rows = await withRLS(userId, (sql) =>
-    sql`INSERT INTO agent_sessions (workspace_id, title, model, provider, system_prompt, created_by)
-        VALUES (${workspaceId}, ${title}, ${model}, ${provider}, ${systemPrompt}, ${userId})
+    sql`INSERT INTO agent_sessions (workspace_id, project_id, title, model, provider, system_prompt, created_by)
+        VALUES (${workspaceId}, ${projectId}, ${title}, ${model}, ${provider}, ${systemPrompt}, ${userId})
         RETURNING *`
   )
   const session = rows[0]

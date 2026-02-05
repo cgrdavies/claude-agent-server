@@ -1,4 +1,5 @@
 import { getSchema } from '@tiptap/core'
+import { TableKit } from '@tiptap/extension-table'
 import { Markdown, MarkdownManager } from '@tiptap/markdown'
 import StarterKit from '@tiptap/starter-kit'
 import { renderToMarkdown } from '@tiptap/static-renderer/pm/markdown'
@@ -12,15 +13,17 @@ import { withRLS } from './lib/db'
 
 export type DocumentInfo = {
   id: string
-  name: string
+  project_id: string
   workspace_id: string
+  folder_id: string | null
+  name: string
   created_by: string
   created_at: string
   updated_at: string
 }
 
 // Shared Tiptap extensions and schema for markdown <-> ProseMirror conversion
-const extensions = [StarterKit, Markdown]
+const extensions = [StarterKit, Markdown, TableKit]
 const schema = getSchema(extensions)
 const markdownManager = new MarkdownManager({ extensions })
 
@@ -58,37 +61,72 @@ function fragmentToMarkdown(fragment: Y.XmlFragment): string {
   return jsonToMarkdown(json)
 }
 
-// In-memory cache of active documents
+// In-memory cache of active documents (keyed by projectId:docId for security)
 const docs = new Map<string, Y.Doc>()
+
+// Track pending loads to prevent race conditions
+const pendingLoads = new Map<string, Promise<Y.Doc | null>>()
+
+function cacheKey(projectId: string, id: string): string {
+  return `${projectId}:${id}`
+}
 
 // Debounce timers for persisting documents
 const persistTimers = new Map<string, Timer>()
 const PERSIST_DEBOUNCE_MS = 500
 
-function cancelPendingPersist(id: string): void {
-  const timer = persistTimers.get(id)
+function cancelPendingPersist(projectId: string, id: string): void {
+  const key = cacheKey(projectId, id)
+  const timer = persistTimers.get(key)
   if (timer) {
     clearTimeout(timer)
-    persistTimers.delete(id)
+    persistTimers.delete(key)
   }
 }
 
 /**
  * Get or load a Y.Doc from cache/database.
- * Returns null if document doesn't exist or isn't in the user's workspace.
+ * Returns null if document doesn't exist or user doesn't have access.
  */
 export async function getDoc(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
 ): Promise<Y.Doc | null> {
-  if (docs.has(id)) return docs.get(id)!
+  const key = cacheKey(projectId, id)
 
+  // Return cached doc if available
+  if (docs.has(key)) {
+    return docs.get(key)!
+  }
+
+  // If a load is already in progress, wait for it
+  if (pendingLoads.has(key)) {
+    return pendingLoads.get(key)!
+  }
+
+  // Start loading and track the promise
+  const loadPromise = loadDoc(userId, projectId, id, key)
+  pendingLoads.set(key, loadPromise)
+
+  try {
+    return await loadPromise
+  } finally {
+    pendingLoads.delete(key)
+  }
+}
+
+async function loadDoc(
+  userId: string,
+  projectId: string,
+  id: string,
+  key: string,
+): Promise<Y.Doc | null> {
   const rows = await withRLS(
     userId,
     sql =>
       sql`SELECT yjs_state FROM documents
-        WHERE id = ${id} AND workspace_id = ${workspaceId}
+        WHERE id = ${id} AND project_id = ${projectId} AND deleted_at IS NULL
         LIMIT 1`,
   )
   const row = rows[0] as { yjs_state: Buffer | Uint8Array } | undefined
@@ -102,9 +140,9 @@ export async function getDoc(
   Y.applyUpdate(doc, state)
 
   // Listen for updates and persist (debounced)
-  doc.on('update', () => debouncedPersist(userId, id, doc))
+  doc.on('update', () => debouncedPersist(userId, projectId, id, doc))
 
-  docs.set(id, doc)
+  docs.set(key, doc)
   return doc
 }
 
@@ -112,8 +150,8 @@ export async function getDoc(
  * Get a Y.Doc from cache only (no DB load).
  * Used by WebSocket sync handler where the doc should already be loaded.
  */
-export function getDocFromCache(id: string): Y.Doc | null {
-  return docs.get(id) ?? null
+export function getDocFromCache(projectId: string, id: string): Y.Doc | null {
+  return docs.get(cacheKey(projectId, id)) ?? null
 }
 
 /**
@@ -123,10 +161,19 @@ export function getDocFromCache(id: string): Y.Doc | null {
  */
 export async function createDoc(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   name: string,
   content?: string,
+  folderId?: string | null,
 ): Promise<DocumentInfo> {
+  // Validate name
+  if (!name || !name.trim()) {
+    throw new Error('Document name cannot be empty')
+  }
+  if (name.length > 100) {
+    throw new Error('Document name cannot exceed 100 characters')
+  }
+
   const doc = new Y.Doc()
   const fragment = doc.getXmlFragment('default')
 
@@ -139,17 +186,25 @@ export async function createDoc(
   const state = Buffer.from(Y.encodeStateAsUpdate(doc))
   const id = crypto.randomUUID()
 
+  // Get workspace_id from project
+  const projectRows = await withRLS(
+    userId,
+    sql => sql`SELECT workspace_id FROM projects WHERE id = ${projectId} AND deleted_at IS NULL LIMIT 1`
+  )
+  const workspaceId = (projectRows[0] as { workspace_id: string })?.workspace_id
+  if (!workspaceId) throw new Error('Project not found')
+
   const rows = await withRLS(
     userId,
     sql =>
-      sql`INSERT INTO documents (id, workspace_id, name, yjs_state, created_by)
-        VALUES (${id}, ${workspaceId}, ${name}, ${state}, ${userId})
-        RETURNING id, workspace_id, name, created_by, created_at, updated_at`,
+      sql`INSERT INTO documents (id, project_id, workspace_id, folder_id, name, yjs_state, created_by)
+        VALUES (${id}, ${projectId}, ${workspaceId}, ${folderId ?? null}, ${name.trim()}, ${state}, ${userId})
+        RETURNING id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at`,
   )
   const info = rows[0] as DocumentInfo
 
-  doc.on('update', () => debouncedPersist(userId, id, doc))
-  docs.set(id, doc)
+  doc.on('update', () => debouncedPersist(userId, projectId, id, doc))
+  docs.set(cacheKey(projectId, id), doc)
 
   return info
 }
@@ -159,44 +214,69 @@ export async function createDoc(
  */
 export async function deleteDoc(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
 ): Promise<boolean> {
-  const doc = docs.get(id)
+  const key = cacheKey(projectId, id)
+  const doc = docs.get(key)
   if (doc) {
     doc.destroy()
-    docs.delete(id)
+    docs.delete(key)
   }
 
   // Cancel any pending persist
-  const timer = persistTimers.get(id)
-  if (timer) {
-    clearTimeout(timer)
-    persistTimers.delete(id)
-  }
+  cancelPendingPersist(projectId, id)
 
   const result = await withRLS(
     userId,
     sql =>
-      sql`DELETE FROM documents WHERE id = ${id} AND workspace_id = ${workspaceId} RETURNING id`,
+      sql`DELETE FROM documents WHERE id = ${id} AND project_id = ${projectId} RETURNING id`,
   )
   return result.length > 0
 }
 
 /**
- * List all documents in a workspace.
+ * List documents in a project, optionally filtered by folder.
+ * @param folderId - If undefined, returns all documents. If null, returns root-level docs. If string, returns docs in that folder.
  */
 export async function listDocs(
   userId: string,
-  workspaceId: string,
+  projectId: string,
+  folderId?: string | null,
 ): Promise<DocumentInfo[]> {
+  if (folderId === undefined) {
+    // All documents in project
+    const rows = await withRLS(
+      userId,
+      sql =>
+        sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
+          FROM documents
+          WHERE project_id = ${projectId} AND deleted_at IS NULL
+          ORDER BY updated_at DESC`,
+    )
+    return rows as unknown as DocumentInfo[]
+  }
+
+  // Documents in specific folder (null = root)
+  if (folderId === null) {
+    const rows = await withRLS(
+      userId,
+      sql =>
+        sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
+          FROM documents
+          WHERE project_id = ${projectId} AND folder_id IS NULL AND deleted_at IS NULL
+          ORDER BY name ASC`,
+    )
+    return rows as unknown as DocumentInfo[]
+  }
+
   const rows = await withRLS(
     userId,
     sql =>
-      sql`SELECT id, workspace_id, name, created_by, created_at, updated_at
+      sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
         FROM documents
-        WHERE workspace_id = ${workspaceId}
-        ORDER BY updated_at DESC`,
+        WHERE project_id = ${projectId} AND folder_id = ${folderId} AND deleted_at IS NULL
+        ORDER BY name ASC`,
   )
   return rows as unknown as DocumentInfo[]
 }
@@ -207,17 +287,17 @@ export async function listDocs(
  */
 export async function readDocAsText(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
 ): Promise<{ name: string; content: string } | null> {
-  const doc = await getDoc(userId, workspaceId, id)
+  const doc = await getDoc(userId, projectId, id)
   if (!doc) return null
 
   // Get the name from DB
   const rows = await withRLS(
     userId,
     sql =>
-      sql`SELECT name FROM documents WHERE id = ${id} AND workspace_id = ${workspaceId} LIMIT 1`,
+      sql`SELECT name FROM documents WHERE id = ${id} AND project_id = ${projectId} AND deleted_at IS NULL LIMIT 1`,
   )
   const row = rows[0] as { name: string } | undefined
   if (!row) return null
@@ -232,23 +312,63 @@ export async function readDocAsText(
  * the fragment content atomically.
  * Returns true if the edit was applied, false if old_text was not found.
  */
+/**
+ * Normalize whitespace for fuzzy matching: collapse runs of whitespace to single space.
+ */
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Find oldText in content with whitespace-normalized matching.
+ * Returns the actual substring in content that matches, or null if not found.
+ */
+function findNormalizedMatch(content: string, oldText: string): { start: number; end: number } | null {
+  // First try exact match
+  const exactIndex = content.indexOf(oldText)
+  if (exactIndex !== -1) {
+    return { start: exactIndex, end: exactIndex + oldText.length }
+  }
+
+  // Try whitespace-normalized matching
+  const normalizedOld = normalizeWhitespace(oldText)
+  if (!normalizedOld) return null
+
+  // Slide a window through content to find a normalized match
+  // This is O(n*m) but documents are small enough for it to be fine
+  for (let start = 0; start < content.length; start++) {
+    for (let end = start + 1; end <= content.length; end++) {
+      const chunk = content.slice(start, end)
+      if (normalizeWhitespace(chunk) === normalizedOld) {
+        return { start, end }
+      }
+      // Early exit: if normalized chunk is already longer than target, move on
+      if (normalizeWhitespace(chunk).length > normalizedOld.length) {
+        break
+      }
+    }
+  }
+
+  return null
+}
+
 export async function editDoc(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
   oldText: string,
   newText: string,
 ): Promise<boolean> {
-  const doc = await getDoc(userId, workspaceId, id)
+  const doc = await getDoc(userId, projectId, id)
   if (!doc) throw new Error(`Document ${id} not found`)
 
   const fragment = doc.getXmlFragment('default')
   const content = fragmentToMarkdown(fragment)
-  const index = content.indexOf(oldText)
-  if (index === -1) return false
+  const match = findNormalizedMatch(content, oldText)
+  if (!match) return false
 
   const edited =
-    content.slice(0, index) + newText + content.slice(index + oldText.length)
+    content.slice(0, match.start) + newText + content.slice(match.end)
 
   doc.transact(() => {
     // Clear existing content
@@ -259,7 +379,7 @@ export async function editDoc(
     populateFragment(fragment, edited)
   })
 
-  cancelPendingPersist(id)
+  cancelPendingPersist(projectId, id)
   await persistDoc(userId, id, doc)
 
   return true
@@ -272,18 +392,20 @@ export async function editDoc(
  */
 export async function appendDoc(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
   content: string,
 ): Promise<void> {
-  const doc = await getDoc(userId, workspaceId, id)
+  const doc = await getDoc(userId, projectId, id)
   if (!doc) throw new Error(`Document ${id} not found`)
 
   const fragment = doc.getXmlFragment('default')
 
-  // Get current content as markdown, append, and replace
+  // Get current content as markdown, append with proper separator, and replace
   const current = fragmentToMarkdown(fragment)
-  const combined = current + content
+  // Ensure there's a blank line between existing content and appended content
+  const separator = current.endsWith('\n\n') ? '' : current.endsWith('\n') ? '\n' : '\n\n'
+  const combined = current + separator + content
 
   doc.transact(() => {
     while (fragment.length > 0) {
@@ -292,7 +414,7 @@ export async function appendDoc(
     populateFragment(fragment, combined)
   })
 
-  cancelPendingPersist(id)
+  cancelPendingPersist(projectId, id)
   await persistDoc(userId, id, doc)
 }
 
@@ -302,11 +424,11 @@ export async function appendDoc(
  */
 export async function replaceDocContent(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
   markdown: string,
 ): Promise<void> {
-  const doc = await getDoc(userId, workspaceId, id)
+  const doc = await getDoc(userId, projectId, id)
   if (!doc) throw new Error(`Document ${id} not found`)
 
   const fragment = doc.getXmlFragment('default')
@@ -318,7 +440,7 @@ export async function replaceDocContent(
     populateFragment(fragment, markdown)
   })
 
-  cancelPendingPersist(id)
+  cancelPendingPersist(projectId, id)
   await persistDoc(userId, id, doc)
 }
 
@@ -327,7 +449,7 @@ export async function replaceDocContent(
  */
 export async function renameDoc(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
   name: string,
 ): Promise<void> {
@@ -335,21 +457,39 @@ export async function renameDoc(
     userId,
     sql =>
       sql`UPDATE documents SET name = ${name}, updated_at = now()
-        WHERE id = ${id} AND workspace_id = ${workspaceId}`,
+        WHERE id = ${id} AND project_id = ${projectId}`,
+  )
+}
+
+/**
+ * Move a document to a different folder.
+ */
+export async function moveDoc(
+  userId: string,
+  projectId: string,
+  id: string,
+  folderId: string | null,
+): Promise<void> {
+  await withRLS(
+    userId,
+    sql =>
+      sql`UPDATE documents SET folder_id = ${folderId}, updated_at = now()
+        WHERE id = ${id} AND project_id = ${projectId}`,
   )
 }
 
 /**
  * Persist a document's current state to Supabase (debounced).
  */
-function debouncedPersist(userId: string, id: string, doc: Y.Doc): void {
-  const existing = persistTimers.get(id)
+function debouncedPersist(userId: string, projectId: string, id: string, doc: Y.Doc): void {
+  const key = cacheKey(projectId, id)
+  const existing = persistTimers.get(key)
   if (existing) clearTimeout(existing)
 
   persistTimers.set(
-    id,
+    key,
     setTimeout(async () => {
-      persistTimers.delete(id)
+      persistTimers.delete(key)
       await persistDoc(userId, id, doc)
     }, PERSIST_DEBOUNCE_MS),
   )
@@ -377,15 +517,15 @@ async function persistDoc(
  */
 export async function getDocInfo(
   userId: string,
-  workspaceId: string,
+  projectId: string,
   id: string,
 ): Promise<DocumentInfo | null> {
   const rows = await withRLS(
     userId,
     sql =>
-      sql`SELECT id, workspace_id, name, created_by, created_at, updated_at
+      sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
         FROM documents
-        WHERE id = ${id} AND workspace_id = ${workspaceId}
+        WHERE id = ${id} AND project_id = ${projectId} AND deleted_at IS NULL
         LIMIT 1`,
   )
   return (rows[0] as DocumentInfo | undefined) ?? null
@@ -407,12 +547,17 @@ export function clearCache(): void {
  */
 export async function flushPendingPersists(userId: string): Promise<void> {
   const promises: Promise<void>[] = []
-  for (const [id, timer] of persistTimers) {
+  for (const [key, timer] of persistTimers) {
     clearTimeout(timer)
-    persistTimers.delete(id)
-    const doc = docs.get(id)
+    persistTimers.delete(key)
+    const doc = docs.get(key)
     if (doc) {
-      promises.push(persistDoc(userId, id, doc))
+      // Extract docId from the cache key (format: projectId:docId)
+      const parts = key.split(':')
+      const docId = parts[1]
+      if (docId) {
+        promises.push(persistDoc(userId, docId, doc))
+      }
     }
   }
   await Promise.all(promises)
