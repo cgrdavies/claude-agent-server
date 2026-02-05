@@ -7,6 +7,17 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { createDocumentTools } from '../tools/document-tools'
 import { db } from '../lib/db'
 
+async function toolResult(value: unknown): Promise<any> {
+  const resolved: any = await (value as any)
+  if (resolved && typeof resolved[Symbol.asyncIterator] === 'function') {
+    for await (const item of resolved as AsyncIterable<any>) {
+      return item
+    }
+    throw new Error('Tool returned an empty AsyncIterable')
+  }
+  return resolved
+}
+
 describe('Phase 9: Agent Document Tools with Folder Support', () => {
   let projectId: string
   let workspaceId: string
@@ -39,93 +50,93 @@ describe('Phase 9: Agent Document Tools with Folder Support', () => {
   })
 
   test('folder_create: can create folder at root', async () => {
-    const result = await tools.folder_create.execute(
+    const result = await toolResult(tools.folder_create.execute!(
       { name: 'Design' },
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('folder_create result:', result)
-    expect(result.id).toBeDefined()
-    expect(result.name).toBe('Design')
-    expect(result.parent_id).toBeNull()
+    expect((result as any).id).toBeDefined()
+    expect((result as any).name).toBe('Design')
+    expect((result as any).parent_id).toBeNull()
   })
 
   test('folder_create: can create nested folder', async () => {
     // First create parent
-    const parent = await tools.folder_create.execute(
+    const parent = await toolResult(tools.folder_create.execute!(
       { name: 'Engineering' },
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     // Then create child
-    const child = await tools.folder_create.execute(
-      { name: 'Backend', parent_id: parent.id },
+    const child = await toolResult(tools.folder_create.execute!(
+      { name: 'Backend', parent_id: (parent as any).id },
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('nested folder_create result:', child)
-    expect(child.id).toBeDefined()
-    expect(child.name).toBe('Backend')
-    expect(child.parent_id).toBe(parent.id)
+    expect((child as any).id).toBeDefined()
+    expect((child as any).name).toBe('Backend')
+    expect((child as any).parent_id).toBe((parent as any).id)
   })
 
   test('folder_list: can list all folders', async () => {
-    const result = await tools.folder_list.execute(
+    const result = await toolResult(tools.folder_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('folder_list result:', result)
-    expect(result.folders).toBeArray()
-    expect(result.folders.length).toBeGreaterThanOrEqual(2) // Design, Engineering, Backend
+    expect((result as any).folders).toBeArray()
+    expect((result as any).folders.length).toBeGreaterThanOrEqual(2) // Design, Engineering, Backend
   })
 
   test('doc_create: can create document in folder', async () => {
     // Get the Design folder
-    const folders = await tools.folder_list.execute(
+    const folders = await toolResult(tools.folder_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
-    const designFolder = folders.folders.find(f => f.name === 'Design')
+    ))
+    const designFolder = (folders as any).folders.find((f: any) => f.name === 'Design')
     expect(designFolder).toBeDefined()
 
     // Create document in folder
-    const result = await tools.doc_create.execute(
-      { name: 'Spec Document', content: '# Spec\n\nThis is a spec.', folder_id: designFolder!.id },
+    const result = await toolResult(tools.doc_create.execute!(
+      { name: 'Spec Document', content: '# Spec\n\nThis is a spec.', folder_id: designFolder!.id as string },
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('doc_create in folder result:', result)
-    expect(result.id).toBeDefined()
-    expect(result.name).toBe('Spec Document')
-    expect(result.folder_id).toBe(designFolder!.id)
+    expect((result as any).id).toBeDefined()
+    expect((result as any).name).toBe('Spec Document')
+    expect((result as any).folder_id).toBe(designFolder!.id)
   })
 
   test('doc_create: can create document at root', async () => {
-    const result = await tools.doc_create.execute(
+    const result = await toolResult(tools.doc_create.execute!(
       { name: 'Root Document', content: '# Root\n\nAt the root.' },
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('doc_create at root result:', result)
-    expect(result.id).toBeDefined()
-    expect(result.name).toBe('Root Document')
-    expect(result.folder_id).toBeNull()
+    expect((result as any).id).toBeDefined()
+    expect((result as any).name).toBe('Root Document')
+    expect((result as any).folder_id).toBeNull()
   })
 
   test('doc_list: can list documents with folder info', async () => {
-    const result = await tools.doc_list.execute(
+    const result = await toolResult(tools.doc_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('doc_list result:', result)
-    expect(result.documents).toBeArray()
-    expect(result.documents.length).toBeGreaterThanOrEqual(2)
+    expect((result as any).documents).toBeArray()
+    expect((result as any).documents.length).toBeGreaterThanOrEqual(2)
 
     // Check that folder_id is included
-    const specDoc = result.documents.find(d => d.name === 'Spec Document')
-    const rootDoc = result.documents.find(d => d.name === 'Root Document')
+    const specDoc = (result as any).documents.find((d: any) => d.name === 'Spec Document')
+    const rootDoc = (result as any).documents.find((d: any) => d.name === 'Root Document')
     expect(specDoc).toBeDefined()
     expect(rootDoc).toBeDefined()
     expect(specDoc!.folder_id).not.toBeNull()
@@ -134,62 +145,62 @@ describe('Phase 9: Agent Document Tools with Folder Support', () => {
 
   test('doc_move: can move document to different folder', async () => {
     // Get folders and docs
-    const folders = await tools.folder_list.execute(
+    const folders = await toolResult(tools.folder_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
-    const docs = await tools.doc_list.execute(
+    ))
+    const docs = await toolResult(tools.doc_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
-    const engineeringFolder = folders.folders.find(f => f.name === 'Engineering')
-    const rootDoc = docs.documents.find(d => d.name === 'Root Document')
+    const engineeringFolder = (folders as any).folders.find((f: any) => f.name === 'Engineering')
+    const rootDoc = (docs as any).documents.find((d: any) => d.name === 'Root Document')
     expect(engineeringFolder).toBeDefined()
     expect(rootDoc).toBeDefined()
 
     // Move root doc to Engineering folder
-    const moveResult = await tools.doc_move.execute(
+    const moveResult = await toolResult(tools.doc_move.execute!(
       { id: rootDoc!.id, folder_id: engineeringFolder!.id },
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('doc_move result:', moveResult)
-    expect(moveResult.success).toBe(true)
+    expect((moveResult as any).success).toBe(true)
 
     // Verify the move
-    const updatedDocs = await tools.doc_list.execute(
+    const updatedDocs = await toolResult(tools.doc_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
-    const movedDoc = updatedDocs.documents.find(d => d.name === 'Root Document')
+    ))
+    const movedDoc = (updatedDocs as any).documents.find((d: any) => d.name === 'Root Document')
     expect(movedDoc!.folder_id).toBe(engineeringFolder!.id)
   })
 
   test('doc_move: can move document to root (null folder)', async () => {
     // Get docs
-    const docs = await tools.doc_list.execute(
+    const docs = await toolResult(tools.doc_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
-    const movedDoc = docs.documents.find(d => d.name === 'Root Document')
+    ))
+    const movedDoc = (docs as any).documents.find((d: any) => d.name === 'Root Document')
     expect(movedDoc).toBeDefined()
 
     // Move back to root
-    const moveResult = await tools.doc_move.execute(
+    const moveResult = await toolResult(tools.doc_move.execute!(
       { id: movedDoc!.id, folder_id: null },
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
+    ))
 
     console.log('doc_move to root result:', moveResult)
-    expect(moveResult.success).toBe(true)
+    expect((moveResult as any).success).toBe(true)
 
     // Verify
-    const updatedDocs = await tools.doc_list.execute(
+    const updatedDocs = await toolResult(tools.doc_list.execute!(
       {},
       { toolCallId: 'test', messages: [], abortSignal: new AbortController().signal }
-    )
-    const backAtRoot = updatedDocs.documents.find(d => d.name === 'Root Document')
+    ))
+    const backAtRoot = (updatedDocs as any).documents.find((d: any) => d.name === 'Root Document')
     expect(backAtRoot!.folder_id).toBeNull()
   })
 })

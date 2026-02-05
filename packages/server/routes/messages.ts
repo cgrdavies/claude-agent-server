@@ -18,6 +18,7 @@ export const messagesRouter = new Hono<Env>()
 
 /**
  * POST /api/sessions/:sessionId/messages
+ * POST /api/projects/:projectId/sessions/:sessionId/messages
  *
  * Sends a user message, runs the agent loop (tool calling in a loop),
  * and streams the response as SSE events.
@@ -25,6 +26,7 @@ export const messagesRouter = new Hono<Env>()
 messagesRouter.post('/:sessionId/messages', async (c) => {
   const userId = c.get('userId')
   const workspaceId = c.get('workspaceId')
+  const projectIdParam = c.req.param('projectId')
   const sessionId = c.req.param('sessionId')
   const body = await c.req.json<SendMessageRequest>()
 
@@ -38,9 +40,19 @@ messagesRouter.post('/:sessionId/messages', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
+  const sessionWorkspaceId = session.workspace_id as string | undefined
+  if (sessionWorkspaceId && sessionWorkspaceId !== workspaceId) {
+    return c.json({ error: 'Session not found' }, 404)
+  }
+
   const projectId = session.project_id as string | undefined
   if (!projectId) {
     return c.json({ error: 'Session has no project_id' }, 400)
+  }
+
+  // If this handler is mounted under /api/projects/:projectId/sessions, enforce scoping.
+  if (projectIdParam && projectIdParam !== projectId) {
+    return c.json({ error: 'Session not found' }, 404)
   }
 
   // Use session's model/provider unless overridden in this message

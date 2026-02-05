@@ -281,6 +281,101 @@ export async function listDocs(
   return rows as unknown as DocumentInfo[]
 }
 
+export type ListDocsPageOptions = {
+  /** undefined = all docs, null = root docs, string = docs in that folder */
+  folderId?: string | null
+  /** default 50 */
+  limit?: number
+  /** default 0 */
+  offset?: number
+}
+
+/**
+ * Paginated document listing for large projects / AI tools.
+ * Returns the current page plus a total count for pagination.
+ */
+export async function listDocsPage(
+  userId: string,
+  projectId: string,
+  options: ListDocsPageOptions = {},
+): Promise<{ documents: DocumentInfo[]; total: number }> {
+  const { folderId, limit = 50, offset = 0 } = options
+
+  // Total count (exclude soft-deleted)
+  const countRows = await withRLS(userId, (sql) =>
+    folderId === undefined
+      ? sql`SELECT COUNT(*)::int as count
+            FROM documents
+            WHERE project_id = ${projectId} AND deleted_at IS NULL`
+      : folderId === null
+        ? sql`SELECT COUNT(*)::int as count
+              FROM documents
+              WHERE project_id = ${projectId} AND folder_id IS NULL AND deleted_at IS NULL`
+        : sql`SELECT COUNT(*)::int as count
+              FROM documents
+              WHERE project_id = ${projectId} AND folder_id = ${folderId} AND deleted_at IS NULL`,
+  )
+  const total = (countRows[0] as { count: number } | undefined)?.count ?? 0
+
+  // Paged rows
+  const rows = await withRLS(userId, (sql) =>
+    folderId === undefined
+      ? sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
+            FROM documents
+            WHERE project_id = ${projectId} AND deleted_at IS NULL
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ${limit} OFFSET ${offset}`
+      : folderId === null
+        ? sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
+              FROM documents
+              WHERE project_id = ${projectId} AND folder_id IS NULL AND deleted_at IS NULL
+              ORDER BY name ASC, id ASC
+              LIMIT ${limit} OFFSET ${offset}`
+        : sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
+              FROM documents
+              WHERE project_id = ${projectId} AND folder_id = ${folderId} AND deleted_at IS NULL
+              ORDER BY name ASC, id ASC
+              LIMIT ${limit} OFFSET ${offset}`,
+  )
+
+  return { documents: rows as unknown as DocumentInfo[], total }
+}
+
+function escapeLikePattern(input: string): string {
+  // Escape LIKE wildcards. We use backslash as the escape character.
+  return input.replace(/[%_\\\\]/g, '\\\\$&')
+}
+
+/**
+ * Search documents by name within a project (case-insensitive).
+ */
+export async function searchDocs(
+  userId: string,
+  projectId: string,
+  query: string,
+  limit: number = 20,
+): Promise<DocumentInfo[]> {
+  const q = query.trim()
+  if (!q) return []
+
+  const safeLimit = Math.min(Math.max(limit, 1), 100)
+  const pattern = `%${escapeLikePattern(q)}%`
+
+  const rows = await withRLS(userId, (sql) =>
+    sql`SELECT id, project_id, workspace_id, folder_id, name, created_by, created_at, updated_at
+        FROM documents
+        WHERE project_id = ${projectId}
+          AND deleted_at IS NULL
+          AND name ILIKE ${pattern} ESCAPE '\\'
+        ORDER BY
+          CASE WHEN lower(name) = lower(${q}) THEN 0 ELSE 1 END,
+          updated_at DESC,
+          id DESC
+        LIMIT ${safeLimit}`,
+  )
+  return rows as unknown as DocumentInfo[]
+}
+
 /**
  * Read document content as markdown string.
  * Converts the Y.XmlFragment to ProseMirror JSON, then to markdown.

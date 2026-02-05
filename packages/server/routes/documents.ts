@@ -20,11 +20,12 @@ documentsRouter.post('/', async (c) => {
   const userId = c.get('userId')
   const body = await c.req.json<CreateDocumentRequest>()
 
-  if (!body.project_id) {
+  const projectId = c.req.param('projectId') ?? body.project_id
+  if (!projectId) {
     return c.json({ error: 'project_id is required' }, 400)
   }
 
-  const info = await docManager.createDoc(userId, body.project_id, body.name, body.content, body.folder_id)
+  const info = await docManager.createDoc(userId, projectId, body.name, body.content, body.folder_id)
 
   return c.json({
     document: {
@@ -43,7 +44,7 @@ documentsRouter.post('/', async (c) => {
 // GET /api/documents?project_id=xxx&folder_id=xxx (optional)
 documentsRouter.get('/', async (c) => {
   const userId = c.get('userId')
-  const projectId = c.req.query('project_id')
+  const projectId = c.req.param('projectId') ?? c.req.query('project_id')
   const folderIdParam = c.req.query('folder_id')
 
   if (!projectId) {
@@ -77,7 +78,7 @@ documentsRouter.get('/', async (c) => {
 documentsRouter.get('/:id', async (c) => {
   const userId = c.get('userId')
   const docId = c.req.param('id')
-  const projectId = c.req.query('project_id')
+  const projectId = c.req.param('projectId') ?? c.req.query('project_id')
 
   if (!projectId) {
     return c.json({ error: 'project_id query parameter is required' }, 400)
@@ -118,24 +119,25 @@ documentsRouter.patch('/:id', async (c) => {
   const docId = c.req.param('id')
   const body = await c.req.json<UpdateDocumentRequest>()
 
-  if (!body.project_id) {
+  const projectId = c.req.param('projectId') ?? body.project_id
+  if (!projectId) {
     return c.json({ error: 'project_id is required' }, 400)
   }
 
-  const existing = await docManager.getDocInfo(userId, body.project_id, docId)
+  const existing = await docManager.getDocInfo(userId, projectId, docId)
   if (!existing) return c.json({ error: 'Document not found' }, 404)
 
   if (body.content !== undefined) {
-    await docManager.replaceDocContent(userId, body.project_id, docId, body.content)
+    await docManager.replaceDocContent(userId, projectId, docId, body.content)
   }
   if (body.name !== undefined) {
-    await docManager.renameDoc(userId, body.project_id, docId, body.name)
+    await docManager.renameDoc(userId, projectId, docId, body.name)
   }
   if (body.folder_id !== undefined) {
-    await docManager.moveDoc(userId, body.project_id, docId, body.folder_id)
+    await docManager.moveDoc(userId, projectId, docId, body.folder_id)
   }
 
-  const updated = await docManager.getDocInfo(userId, body.project_id, docId)
+  const updated = await docManager.getDocInfo(userId, projectId, docId)
   if (!updated) return c.json({ error: 'Document not found' }, 404)
 
   return c.json({
@@ -156,7 +158,7 @@ documentsRouter.patch('/:id', async (c) => {
 documentsRouter.delete('/:id', async (c) => {
   const userId = c.get('userId')
   const docId = c.req.param('id')
-  const projectId = c.req.query('project_id')
+  const projectId = c.req.param('projectId') ?? c.req.query('project_id')
 
   if (!projectId) {
     return c.json({ error: 'project_id query parameter is required' }, 400)

@@ -15,6 +15,9 @@ import type {
 } from '@claude-agent/shared'
 import { withRLS } from '../lib/db'
 import { foldersRouter } from './folders'
+import { sessionsRouter } from './sessions'
+import { messagesRouter } from './messages'
+import { documentsRouter } from './documents'
 import * as folderManager from '../folder-manager'
 
 type Env = { Variables: { userId: string; workspaceId: string; isSuperuser: boolean } }
@@ -326,3 +329,8 @@ projectsRouter.get('/:projectId/search', async (c) => {
 
 // Mount nested routers
 projectsRouter.route('/:projectId/folders', foldersRouter)
+projectsRouter.route('/:projectId/sessions', sessionsRouter)
+// Messages are nested under sessions, but mounted here to expose:
+// POST /api/projects/:projectId/sessions/:sessionId/messages
+projectsRouter.route('/:projectId/sessions', messagesRouter)
+projectsRouter.route('/:projectId/documents', documentsRouter)

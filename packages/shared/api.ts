@@ -132,7 +132,12 @@ export type SearchResponse = {
 export type CreateDocumentRequest = {
   name: string
   content?: string // initial markdown
-  project_id: string // required until nested routes are implemented
+  /**
+   * Legacy only: required for the workspace-scoped `/api/documents` endpoint.
+   * For the canonical nested endpoint (`/api/projects/:projectId/documents`),
+   * the project_id comes from the URL param.
+   */
+  project_id?: string
   folder_id?: string // null/omit = project root
 }
 
@@ -153,7 +158,12 @@ export type GetDocumentResponse = {
 export type UpdateDocumentRequest = {
   name?: string
   content?: string
-  project_id: string // required until nested routes are implemented
+  /**
+   * Legacy only: required for the workspace-scoped `/api/documents/:id` endpoint.
+   * For the canonical nested endpoint (`/api/projects/:projectId/documents/:id`),
+   * the project_id comes from the URL param.
+   */
+  project_id?: string
   folder_id?: string | null // move to different folder
 }
 
@@ -166,7 +176,12 @@ export type UpdateDocumentResponse = {
 // ============================================================
 
 export type CreateSessionRequest = {
-  project_id: string // required: the project this session belongs to
+  /**
+   * Legacy only: required for the workspace-scoped `/api/sessions` endpoint.
+   * For the canonical nested endpoint (`/api/projects/:projectId/sessions`),
+   * the project_id comes from the URL param.
+   */
+  project_id?: string
   title?: string
   model?: string // defaults to server default
   provider?: Provider // defaults to 'anthropic'

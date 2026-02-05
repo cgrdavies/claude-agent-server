@@ -4,6 +4,8 @@ import { z } from 'zod'
 import * as docManager from '../document-manager'
 import * as folderManager from '../folder-manager'
 
+const MAX_CONTENT_LENGTH = 50_000 // ~50KB, roughly 12k tokens
+
 function unquote(text: string): string {
   const trimmed = text.trim()
   if (trimmed.length < 2) return trimmed
@@ -59,14 +61,31 @@ export function createDocumentTools(projectId: string, userId: string) {
 
     doc_read: tool({
       description:
-        'Read a document as markdown. Returns the full document content.',
+        'Read a document as markdown. For large documents, content may be truncated.',
       inputSchema: z.object({
         id: z.string().describe('Document ID'),
       }),
       execute: async ({ id }) => {
         const result = await docManager.readDocAsText(userId, projectId, id)
         if (!result) return { error: 'Document not found' }
-        return { id, name: result.name, content: result.content }
+
+        // Guard against large documents crowding the model context.
+        let content = result.content
+        let truncated = false
+        if (content.length > MAX_CONTENT_LENGTH) {
+          content = content.slice(0, MAX_CONTENT_LENGTH)
+          truncated = true
+        }
+
+        return {
+          id,
+          name: result.name,
+          content,
+          truncated,
+          ...(truncated && {
+            note: `Content truncated at ${MAX_CONTENT_LENGTH} characters (document is ${result.content.length} characters total).`,
+          }),
+        }
       },
     }),
 
@@ -121,13 +140,59 @@ export function createDocumentTools(projectId: string, userId: string) {
     }),
 
     doc_list: tool({
-      description: 'List documents. Optionally filter by folder.',
+      description: 'List documents in the project. Supports pagination for large projects.',
       inputSchema: z.object({
-        folder_id: z.string().optional().describe('Folder ID to list. Omit for all documents.'),
+        folder_id: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Folder ID to list. Omit for all documents. Use null for project root.'),
+        limit: z.number().optional().describe('Max documents to return (default 50, max 100)'),
+        offset: z.number().optional().describe('Skip this many documents (for pagination)'),
       }),
-      execute: async ({ folder_id }) => {
-        const docs = await docManager.listDocs(userId, projectId, folder_id)
-        return { documents: docs.map(d => ({ id: d.id, name: d.name, folder_id: d.folder_id })) }
+      execute: async ({ folder_id, limit, offset }) => {
+        const safeLimit = Math.min(limit ?? 50, 100)
+        const safeOffset = Math.max(offset ?? 0, 0)
+
+        const result = await docManager.listDocsPage(userId, projectId, {
+          folderId: folder_id,
+          limit: safeLimit,
+          offset: safeOffset,
+        })
+
+        return {
+          documents: result.documents.map((d) => ({
+            id: d.id,
+            name: d.name,
+            folder_id: d.folder_id,
+          })),
+          total: result.total,
+          limit: safeLimit,
+          offset: safeOffset,
+        }
+      },
+    }),
+
+    doc_search: tool({
+      description: 'Search documents by name (case-insensitive).',
+      inputSchema: z.object({
+        query: z.string().describe('Search query (matched against document name)'),
+        limit: z.number().optional().describe('Max results to return (default 20, max 100)'),
+      }),
+      execute: async ({ query, limit }) => {
+        const results = await docManager.searchDocs(
+          userId,
+          projectId,
+          query,
+          limit ?? 20,
+        )
+        return {
+          documents: results.map((d) => ({
+            id: d.id,
+            name: d.name,
+            folder_id: d.folder_id,
+          })),
+        }
       },
     }),
 
